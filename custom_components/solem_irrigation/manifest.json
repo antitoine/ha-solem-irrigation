@@ -1,0 +1,13 @@
+{
+  "domain": "solem_irrigation",
+  "name": "SOLEM Irrigation",
+  "codeowners": ["@antitoine"],
+  "config_flow": true,
+  "documentation": "https://github.com/antitoine/ha-solem-irrigation",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/antitoine/ha-solem-irrigation/issues",
+  "loggers": ["custom_components.solem_irrigation"],
+  "requirements": [],
+  "version": "0.1.0"
+}

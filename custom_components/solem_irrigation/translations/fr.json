@@ -1,0 +1,62 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connexion à MySOLEM",
+        "description": "Saisissez les identifiants de votre compte MySOLEM (les mêmes que sur mysolem.com).",
+        "data": {
+          "email": "E-mail",
+          "password": "Mot de passe",
+          "region": "Région"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Ré-authentification MySOLEM",
+        "description": "La session MySOLEM de {email} a expiré. Veuillez saisir à nouveau le mot de passe.",
+        "data": {
+          "password": "Mot de passe"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "E-mail ou mot de passe invalide.",
+      "cannot_connect": "Échec de la connexion à MySOLEM."
+    },
+    "abort": {
+      "already_configured": "Ce compte MySOLEM est déjà configuré.",
+      "reauth_successful": "Ré-authentification réussie.",
+      "wrong_account": "Les identifiants correspondent à un autre compte MySOLEM que celui ré-authentifié."
+    }
+  },
+  "entity": {
+    "switch": {
+      "enabled": {
+        "name": "Arrosage activé"
+      }
+    },
+    "number": {
+      "run_duration": {
+        "name": "Durée d'arrosage"
+      },
+      "rain_delay": {
+        "name": "Report de pluie"
+      }
+    },
+    "sensor": {
+      "running_station": {
+        "name": "Station en cours"
+      },
+      "last_communication": {
+        "name": "Dernière communication"
+      },
+      "battery": {
+        "name": "Batterie"
+      }
+    },
+    "button": {
+      "stop": {
+        "name": "Arrêter l'arrosage"
+      }
+    }
+  }
+}

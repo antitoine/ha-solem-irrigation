@@ -1,0 +1,62 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to MySOLEM",
+        "description": "Enter the credentials of your MySOLEM account (the same ones you use on mysolem.com).",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "region": "Region"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate MySOLEM",
+        "description": "The MySOLEM session for {email} expired. Please re-enter the password.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password.",
+      "cannot_connect": "Failed to connect to MySOLEM."
+    },
+    "abort": {
+      "already_configured": "This MySOLEM account is already configured.",
+      "reauth_successful": "Re-authentication was successful.",
+      "wrong_account": "The credentials are for a different MySOLEM account than the one being re-authenticated."
+    }
+  },
+  "entity": {
+    "switch": {
+      "enabled": {
+        "name": "Irrigation enabled"
+      }
+    },
+    "number": {
+      "run_duration": {
+        "name": "Run duration"
+      },
+      "rain_delay": {
+        "name": "Rain delay"
+      }
+    },
+    "sensor": {
+      "running_station": {
+        "name": "Watering station"
+      },
+      "last_communication": {
+        "name": "Last communication"
+      },
+      "battery": {
+        "name": "Battery"
+      }
+    },
+    "button": {
+      "stop": {
+        "name": "Stop watering"
+      }
+    }
+  }
+}
