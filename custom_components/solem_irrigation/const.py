@@ -27,12 +27,6 @@ BASE_URLS = {
 # we do not own.
 DEFAULT_SCAN_INTERVAL = timedelta(minutes=5)
 
-# A module is treated as an irrigation controller when it both exposes stations
-# and its type starts with one of these prefixes. This deliberately excludes
-# pool products on the same account (lr-pc, lr-ps/lr-mas) and the gateway
-# (lr-mb-*), which are not irrigation controllers.
-IRRIGATION_TYPE_PREFIXES = ("lr-is", "lr-ip", "wf-is", "wf-ip", "bl-is", "bl-ip")
-
 # Manual run duration (minutes) used when a station switch is turned on.
 DEFAULT_RUN_MINUTES = 5
 MIN_RUN_MINUTES = 1

@@ -28,7 +28,6 @@ from .const import (
     DEFAULT_RUN_MINUTES,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
-    IRRIGATION_TYPE_PREFIXES,
     REGION_EUROPE,
 )
 
@@ -72,14 +71,15 @@ class SolemModule:
 
     @property
     def is_controller(self) -> bool:
-        """An irrigation controller exposes stations and is an irrigation type.
+        """True for irrigation controllers (a watering type with stations).
 
-        This excludes pool modules (lr-pc, lr-ps) that may also report stations
-        but are managed elsewhere, and the gateway (which has no stations).
+        Uses SOLEM's own ``typeIsWatering`` flag, which is the authoritative
+        signal: it is True for irrigation controllers (LR-IS/LR-IP/WF-IS…) and
+        False for pool controllers (which can *also* expose ``outputs``),
+        sensors, and the gateway. Filtering on ``type`` prefixes or merely
+        "has stations" would wrongly pick up the pool controller.
         """
-        return bool(self.stations) and self.type.startswith(
-            IRRIGATION_TYPE_PREFIXES
-        )
+        return bool(self.stations) and bool(self.raw.get("typeIsWatering"))
 
 
 class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -144,35 +144,37 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         """
         try:
             await self.client.async_login()
-            raw_modules = await self.client.async_get_modules()
+            module_ids = await self.client.async_get_module_ids()
             modules: dict[str, SolemModule] = {}
-            for raw in raw_modules:
-                module_id = raw.get("id")
-                if not module_id:
-                    continue
+            for module_id in module_ids:
                 # A non-controller (gateway, sensor) or a transient hiccup must
                 # not abort discovery of the rest of the fleet.
                 try:
-                    config = await self.client.async_get_module_config(module_id)
+                    obj = await self.client.async_get_module(module_id)
                 except SolemError as err:
                     _LOGGER.warning(
-                        "Could not read config for module %s: %s", module_id, err
+                        "Could not read module %s: %s", module_id, err
                     )
-                    config = {"outputs": [], "programs": []}
-                modules[module_id] = SolemModule(
+                    continue
+                if not obj:
+                    _LOGGER.warning(
+                        "Module %s returned no parseable data; skipping", module_id
+                    )
+                    continue
+                module = SolemModule(
                     id=module_id,
-                    name=raw.get("name", module_id),
-                    serial=raw.get("serialNumber", ""),
-                    type=raw.get("type", ""),
-                    display_type=raw.get("displayType", raw.get("type", "")),
-                    raw=raw,
+                    name=obj.get("name", module_id),
+                    serial=obj.get("serialNumber", ""),
+                    type=obj.get("type", ""),
+                    display_type=obj.get("displayType", obj.get("type", "")),
+                    raw=obj,
                     stations=[
                         SolemStation(
                             id=o["id"],
                             name=o.get("name", f"Station {o.get('index', '?')}"),
                             index=int(o.get("index", 0)),
                         )
-                        for o in config["outputs"]
+                        for o in (obj.get("outputs") or [])
                         if o.get("id")
                     ],
                     programs=[
@@ -181,11 +183,31 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                             name=p.get("name", f"Program {p.get('index', '?')}"),
                             index=int(p.get("index", 0)),
                         )
-                        for p in config["programs"]
+                        for p in (obj.get("programs") or [])
                         if p.get("id")
                     ],
                 )
+                modules[module_id] = module
+                _LOGGER.debug(
+                    "Discovered module %s: name=%s type=%s outputs=%d programs=%d controller=%s",
+                    module_id,
+                    module.name,
+                    module.type,
+                    len(module.stations),
+                    len(module.programs),
+                    module.is_controller,
+                )
             self.modules = modules
+
+            controllers = [m for m in modules.values() if m.is_controller]
+            if not controllers:
+                _LOGGER.warning(
+                    "SOLEM: found %d module(s) but no irrigation controllers, "
+                    "so no entities will be created. Modules seen: %s",
+                    len(modules),
+                    ", ".join(f"{m.name} ({m.type})" for m in modules.values())
+                    or "none",
+                )
         except SolemAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except SolemConnectionError as err:

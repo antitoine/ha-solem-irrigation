@@ -173,28 +173,31 @@ class SolemApiClient:
 
     # -- reads --------------------------------------------------------------
 
-    async def async_get_modules(self) -> list[dict[str, Any]]:
-        """Return the account's module list (summary objects)."""
+    async def async_get_module_ids(self) -> list[str]:
+        """Return the IDs of every module on the account.
+
+        Note: this endpoint only returns ``{"id": …}`` per module unless a
+        field projection is sent in the request body, so we use it purely for
+        discovery and read the full record per module via :meth:`async_get_module`.
+        """
         await self._ensure_login()
         data = await self._request_json(
             "POST", f"/users/{self._user_id}/modules"
         )
         modules = data.get("modules", []) if isinstance(data, dict) else []
-        return modules
+        return [m["id"] for m in modules if isinstance(m, dict) and m.get("id")]
 
-    async def async_get_module_config(self, module_id: str) -> dict[str, Any]:
-        """Return ``{"outputs": [...], "programs": [...]}`` for a module.
+    async def async_get_module(self, module_id: str) -> dict[str, Any]:
+        """Return the full module record parsed from the module page.
 
-        Parsed from the embedded ``let module = {…}`` object on the module page.
-        Returns empty lists for modules without stations (e.g. a gateway).
+        The record is the embedded ``let module = {…}`` object and contains
+        everything we need: ``name``, ``serialNumber``, ``type``, the
+        ``typeIs*`` capability flags, ``outputs`` (stations) and ``programs``.
+        Returns an empty dict if the page could not be parsed.
         """
         await self._ensure_login()
         html = await self._request_text("GET", f"/module/{module_id}")
-        module = _extract_js_object(html, _MODULE_MARKER) or {}
-        return {
-            "outputs": module.get("outputs", []) or [],
-            "programs": module.get("programs", []) or [],
-        }
+        return _extract_js_object(html, _MODULE_MARKER) or {}
 
     async def async_get_module_state(self, module_id: str) -> dict[str, Any]:
         """Return the live watering state for a module."""
