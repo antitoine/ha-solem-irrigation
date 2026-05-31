@@ -83,8 +83,8 @@ class SolemStationValve(SolemModuleEntity, ValveEntity):
         )
 
     async def async_open_valve(self, **kwargs: Any) -> None:
-        """Start watering this station for the remembered duration."""
-        minutes = self.coordinator.get_run_minutes(self._module_id)
+        """Start watering this station for its remembered duration."""
+        minutes = self.coordinator.get_run_minutes(self._station.id)
         await self.coordinator.async_command_run_station(
             self._module, self._station, minutes
         )

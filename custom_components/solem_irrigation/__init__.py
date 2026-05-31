@@ -12,6 +12,8 @@ from .coordinator import SolemConfigEntry, SolemDataUpdateCoordinator
 PLATFORMS: list[Platform] = [
     Platform.SWITCH,
     Platform.VALVE,
+    Platform.SELECT,
+    Platform.NUMBER,
     Platform.SENSOR,
 ]
 
@@ -19,11 +21,12 @@ PLATFORMS: list[Platform] = [
 # control surface no longer provides. They are removed on setup so they do not
 # linger as "unavailable" entities after an upgrade:
 #   <= 0.1.x : station switches (_station_), program buttons (_program_),
-#              stop button (_stop), Run-duration / Rain-delay numbers.
+#              stop button (_stop), Run-duration number (_run_duration).
 #   0.2.x    : the "Manual run" select (_manual_run), replaced by station valves.
+# NB: ``_rain_delay`` is intentionally NOT listed — the Rain-delay number is a
+# current entity again (v0.4.0); ``_run_program`` is the current select.
 _LEGACY_UNIQUE_ID_SUFFIXES = (
     "_stop",
-    "_rain_delay",
     "_run_duration",
     "_manual_run",
 )

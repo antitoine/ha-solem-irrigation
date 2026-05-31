@@ -173,9 +173,9 @@ class SolemEnableSwitch(SolemModuleEntity, SwitchEntity, RestoreEntity):
         if resolved is None:
             raise ServiceValidationError(f"Unknown station: {station}")
         if duration is not None:
-            # Explicit duration becomes the remembered default for next time.
-            await coordinator.async_set_run_minutes(module.id, duration)
+            # Explicit duration becomes this station's remembered default.
+            await coordinator.async_set_run_minutes(resolved.id, duration)
             minutes = duration
         else:
-            minutes = coordinator.get_run_minutes(module.id)
+            minutes = coordinator.get_run_minutes(resolved.id)
         await coordinator.async_command_run_station(module, resolved, minutes)

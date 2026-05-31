@@ -136,9 +136,10 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
             region=entry.data.get(CONF_REGION, REGION_EUROPE),
         )
         self.modules: dict[str, SolemModule] = {}
-        # Manual-run duration (minutes), per controller. Seeded with a default and
-        # then updated to the last value passed to the ``run`` service, so manual
-        # runs "remember" the duration. Persisted via ``_store``.
+        # Manual-run duration (minutes), keyed by **station id**. Drives how long
+        # opening a station's valve runs it; set by each station's "Run duration"
+        # number (and by an explicit ``run`` service ``duration``). Persisted via
+        # ``_store`` and seeded with ``DEFAULT_RUN_MINUTES`` per station.
         self.run_minutes: dict[str, int] = {}
         self._store: Store[dict[str, int]] = Store(
             hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry.entry_id}"
@@ -169,14 +170,19 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
 
         self._refresh_unsub = async_call_later(self.hass, delay, _do_refresh)
 
-    def get_run_minutes(self, module_id: str) -> int:
-        """Return the remembered manual run duration for a module (minutes)."""
-        return self.run_minutes.get(module_id, DEFAULT_RUN_MINUTES)
+    def get_run_minutes(self, station_id: str) -> int:
+        """Return the remembered manual run duration for a station (minutes)."""
+        return self.run_minutes.get(station_id, DEFAULT_RUN_MINUTES)
 
-    async def async_set_run_minutes(self, module_id: str, minutes: int) -> None:
-        """Remember a manual-run duration for a module and persist it."""
-        self.run_minutes[module_id] = int(minutes)
+    async def async_set_run_minutes(self, station_id: str, minutes: int) -> None:
+        """Remember a station's manual-run duration, persist, and notify entities.
+
+        ``async_update_listeners`` keeps the station's "Run duration" number in
+        sync when the value is changed elsewhere (e.g. via the ``run`` service).
+        """
+        self.run_minutes[station_id] = int(minutes)
         await self._store.async_save(self.run_minutes)
+        self.async_update_listeners()
 
     async def async_setup(self) -> None:
         """Log in and discover modules and their stations/programs.
