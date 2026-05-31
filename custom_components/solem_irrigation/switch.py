@@ -3,6 +3,14 @@
 A single master switch per controller enables / disables it. Turning it off
 disables permanently; the ``solem_irrigation.set_enabled`` service additionally
 accepts ``days`` to disable for a period (the rain-delay path).
+
+Both controller-level services are registered here (the enable switch is the
+single entity that represents the controller):
+
+* ``solem_irrigation.set_enabled`` — global on/off (+ optional rain-delay days).
+* ``solem_irrigation.run`` — stop, run a program, or run a station for a
+  specific duration (the stations are also exposed as valves for the common
+  "run for the usual time" case).
 """
 
 from __future__ import annotations
@@ -13,14 +21,26 @@ import voluptuous as vol
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
     ATTR_DAYS,
+    ATTR_DURATION,
     ATTR_ENABLED,
+    ATTR_MODE,
+    ATTR_PROGRAM,
+    ATTR_STATION,
     MAX_RAIN_DELAY_DAYS,
+    MAX_RUN_MINUTES,
+    MIN_RUN_MINUTES,
+    MODE_PROGRAM,
+    MODE_STATION,
+    MODE_STOP,
+    RUN_MODES,
+    SERVICE_RUN,
     SERVICE_SET_ENABLED,
 )
 from .coordinator import (
@@ -36,7 +56,7 @@ async def async_setup_entry(
     entry: SolemConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the SOLEM enable switch and the ``set_enabled`` service."""
+    """Set up the SOLEM enable switch and the controller-level services."""
     coordinator = entry.runtime_data
     async_add_entities(
         SolemEnableSwitch(coordinator, module)
@@ -54,6 +74,18 @@ async def async_setup_entry(
             ),
         },
         "async_set_enabled",
+    )
+    platform.async_register_entity_service(
+        SERVICE_RUN,
+        {
+            vol.Required(ATTR_MODE): vol.In(RUN_MODES),
+            vol.Optional(ATTR_PROGRAM): cv.string,
+            vol.Optional(ATTR_STATION): cv.string,
+            vol.Optional(ATTR_DURATION): vol.All(
+                vol.Coerce(int), vol.Range(min=MIN_RUN_MINUTES, max=MAX_RUN_MINUTES)
+            ),
+        },
+        "async_handle_run",
     )
 
 
@@ -108,3 +140,42 @@ class SolemEnableSwitch(SolemModuleEntity, SwitchEntity, RestoreEntity):
         )
         self._is_on = enabled
         self.async_write_ha_state()
+
+    async def async_handle_run(
+        self,
+        mode: str,
+        program: str | None = None,
+        station: str | None = None,
+        duration: int | None = None,
+    ) -> None:
+        """Handle the ``solem_irrigation.run`` service for this controller."""
+        module = self._module
+        coordinator = self.coordinator
+        if mode == MODE_STOP:
+            await coordinator.async_command_stop(module)
+            return
+        if mode == MODE_PROGRAM:
+            if not program:
+                raise ServiceValidationError(
+                    "The 'program' field is required when mode is 'program'."
+                )
+            resolved = module.find_program(program)
+            if resolved is None:
+                raise ServiceValidationError(f"Unknown program: {program}")
+            await coordinator.async_command_run_program(module, resolved)
+            return
+        # mode == MODE_STATION
+        if not station:
+            raise ServiceValidationError(
+                "The 'station' field is required when mode is 'station'."
+            )
+        resolved = module.find_station(station)
+        if resolved is None:
+            raise ServiceValidationError(f"Unknown station: {station}")
+        if duration is not None:
+            # Explicit duration becomes the remembered default for next time.
+            await coordinator.async_set_run_minutes(module.id, duration)
+            minutes = duration
+        else:
+            minutes = coordinator.get_run_minutes(module.id)
+        await coordinator.async_command_run_station(module, resolved, minutes)

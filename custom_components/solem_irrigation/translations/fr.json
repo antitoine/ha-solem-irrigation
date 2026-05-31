@@ -34,11 +34,6 @@
         "name": "Arrosage activé"
       }
     },
-    "select": {
-      "manual_run": {
-        "name": "Commande manuelle"
-      }
-    },
     "sensor": {
       "running_station": {
         "name": "Station en cours"
