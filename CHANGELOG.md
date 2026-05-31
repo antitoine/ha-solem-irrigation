@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-31
+
+Adopt the standard Home Assistant irrigation model (as used by Hunter Hydrawise):
+each station is now a **valve** instead of options in a dropdown.
+
+### Added
+
+- **Valve** per station: open it to water that station for the remembered
+  duration (the controller stops it automatically); close it to stop. Because
+  every valve's state is derived from the single running-station reading, only
+  one valve is ever open — faithfully modelling SOLEM's one-station-at-a-time
+  hardware. Works with the standard tile/valve cards, voice, and the Schedule
+  helper.
+
+### Changed
+
+- **BREAKING:** the *Manual run* `select` (added in 0.2.0) has been removed and
+  replaced by the per-station valves. It is auto-removed from the entity
+  registry on upgrade.
+- The `solem_irrigation.run` service is unchanged but now targets the
+  *Irrigation enabled* switch (the controller entity) instead of the select. It
+  remains the way to run a **program**, to **stop**, or to run a station for a
+  **specific** (non-default) duration.
+
+### Fixed
+
+- The dropdown could not stop a running **program** (it showed `Stop` when idle,
+  and a select never re-fires the already-selected option). Removing the select
+  in favour of valves resolves this — closing the open valve, or
+  `solem_irrigation.run` with `mode: stop`, always stops.
+
 ## [0.2.0] - 2026-05-31
 
 Simplified control surface, aligned with the SOLEM app: two conceptual commands
@@ -77,7 +108,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.1.0...v0.1.1

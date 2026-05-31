@@ -322,3 +322,28 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         state["status"] = status
         data[module_id] = state
         self.async_set_updated_data(data)
+
+    # -- commands (client call + optimistic update + reconcile) ------------
+    # Shared by the station valves and the ``run`` service so the optimistic
+    # update and the delayed reconcile are applied consistently on every path.
+
+    async def async_command_stop(self, module: SolemModule) -> None:
+        """Stop any running watering on a controller (global stop)."""
+        await self.client.async_stop(module.serial)
+        self.apply_optimistic_running_station(module.id, 0)
+        self.async_schedule_refresh()
+
+    async def async_command_run_station(
+        self, module: SolemModule, station: SolemStation, minutes: int
+    ) -> None:
+        """Run a single station for ``minutes`` (replaces any running station)."""
+        await self.client.async_run_station(module.serial, station.id, minutes)
+        self.apply_optimistic_running_station(module.id, station.index)
+        self.async_schedule_refresh()
+
+    async def async_command_run_program(
+        self, module: SolemModule, program: SolemProgram
+    ) -> None:
+        """Start a stored program (its first station appears on the next poll)."""
+        await self.client.async_run_program(module.serial, program.id)
+        self.async_schedule_refresh()

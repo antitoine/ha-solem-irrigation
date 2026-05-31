@@ -20,13 +20,14 @@ Bluetooth-only community integrations cannot reach.
 
 ## Features
 
-The control surface mirrors the SOLEM app: one on/off and one manual command.
-For each irrigation controller on your account:
+The integration follows the standard Home Assistant irrigation model (the same
+one the Hunter Hydrawise integration uses). For each irrigation controller on
+your account:
 
 | Entity | What it does |
 | --- | --- |
+| **Valve** per station | Open it to water that station for the remembered duration (the controller stops it automatically); close it to stop. Named after the station in MySOLEM. Only one is ever open — the controller waters one station at a time. |
 | **Switch** *Irrigation enabled* | Turn the controller on, or off permanently (assumed state). |
-| **Select** *Manual run* | One dropdown to **Stop**, run any program, or run any station. Stations run for the remembered duration; it also shows the station currently watering. |
 | **Sensor** *Watering station* | Name of the station currently watering (idle = none). |
 | **Sensor** *Last communication* | Last radio contact with the module. |
 | **Sensor** *Battery* | Battery indicator (battery-powered modules). |
@@ -35,11 +36,12 @@ For each irrigation controller on your account:
 
 | Action | What it does |
 | --- | --- |
-| `solem_irrigation.run` | The manual command for automations: `mode` (`stop` / `program` / `station`) plus `program`, `station`, and `duration` (minutes). An explicit `duration` is remembered for the next run. |
+| `solem_irrigation.run` | Stop, run a **program**, or run a station for a **specific** duration: `mode` (`stop` / `program` / `station`) plus `program`, `station`, and `duration` (minutes). An explicit `duration` is remembered for the next run. Programs are run through this action (no per-program entity). |
 | `solem_irrigation.set_enabled` | The on/off command: `enabled` (true/false) plus an optional `days` to disable for a period (rain delay; `0`/omitted = permanent). |
 
-Only one station or program runs at a time, which is why the manual command is a
-single dropdown rather than a switch per station.
+Opening a station valve runs it for the remembered duration (default 5 min until
+you set one); use `solem_irrigation.run` to run for a specific duration, which
+then becomes the new remembered default.
 
 Every module (including the gateway) appears as a Home Assistant **device**;
 controllers are linked to the gateway they communicate through.

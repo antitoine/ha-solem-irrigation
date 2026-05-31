@@ -34,11 +34,6 @@
         "name": "Irrigation enabled"
       }
     },
-    "select": {
-      "manual_run": {
-        "name": "Manual run"
-      }
-    },
     "sensor": {
       "running_station": {
         "name": "Watering station"

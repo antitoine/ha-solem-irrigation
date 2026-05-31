@@ -22,7 +22,7 @@ run:
   target:
     entity:
       integration: solem_irrigation
-      domain: select
+      domain: switch
   fields:
     mode:
       required: true

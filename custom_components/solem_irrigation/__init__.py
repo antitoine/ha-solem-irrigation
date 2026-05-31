@@ -11,14 +11,22 @@ from .coordinator import SolemConfigEntry, SolemDataUpdateCoordinator
 
 PLATFORMS: list[Platform] = [
     Platform.SWITCH,
-    Platform.SELECT,
+    Platform.VALVE,
     Platform.SENSOR,
 ]
 
-# Suffixes/substrings of unique_ids created by versions <= 0.1.x that the new
+# Suffixes/substrings of unique_ids created by earlier versions that the current
 # control surface no longer provides. They are removed on setup so they do not
-# linger as "unavailable" entities after the upgrade.
-_LEGACY_UNIQUE_ID_SUFFIXES = ("_stop", "_rain_delay", "_run_duration")
+# linger as "unavailable" entities after an upgrade:
+#   <= 0.1.x : station switches (_station_), program buttons (_program_),
+#              stop button (_stop), Run-duration / Rain-delay numbers.
+#   0.2.x    : the "Manual run" select (_manual_run), replaced by station valves.
+_LEGACY_UNIQUE_ID_SUFFIXES = (
+    "_stop",
+    "_rain_delay",
+    "_run_duration",
+    "_manual_run",
+)
 _LEGACY_UNIQUE_ID_SUBSTRINGS = ("_station_", "_program_")
 
 
