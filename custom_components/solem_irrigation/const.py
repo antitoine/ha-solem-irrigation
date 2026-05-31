@@ -42,3 +42,26 @@ CMD_PROGRAM = "program"
 CMD_STATUS = "status"
 STATUS_ON = "on"
 STATUS_OFF = "off"
+
+# Services (Actions) -----------------------------------------------------------
+# Global on/off command, folding the rain-delay ("off for N days") in.
+SERVICE_SET_ENABLED = "set_enabled"
+ATTR_ENABLED = "enabled"
+ATTR_DAYS = "days"
+
+# Unified manual command: stop / run a program / run a station for a duration.
+SERVICE_RUN = "run"
+ATTR_MODE = "mode"
+ATTR_PROGRAM = "program"
+ATTR_STATION = "station"
+ATTR_DURATION = "duration"
+
+MODE_STOP = "stop"
+MODE_PROGRAM = "program"
+MODE_STATION = "station"
+RUN_MODES = [MODE_STOP, MODE_PROGRAM, MODE_STATION]
+
+# Storage key for the remembered manual-run duration (replaces the old
+# "Run duration" number entity, which persisted via RestoreNumber).
+STORAGE_VERSION = 1
+STORAGE_KEY = f"{DOMAIN}.run_minutes"
