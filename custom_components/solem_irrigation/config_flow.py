@@ -7,7 +7,6 @@ from typing import Any
 
 import aiohttp
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
@@ -31,9 +30,7 @@ class SolemConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _validate(self, data: Mapping[str, Any]) -> tuple[str | None, dict]:
         """Try to log in. Return (user_id, errors)."""
         errors: dict[str, str] = {}
-        session = async_create_clientsession(
-            self.hass, cookie_jar=aiohttp.CookieJar()
-        )
+        session = async_create_clientsession(self.hass, cookie_jar=aiohttp.CookieJar())
         client = SolemApiClient(
             session,
             email=data[CONF_EMAIL],

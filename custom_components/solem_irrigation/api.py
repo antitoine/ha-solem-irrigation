@@ -135,9 +135,7 @@ class SolemApiClient:
             "country-select": self._region,
         }
         try:
-            async with self._session.post(
-                f"{self._base}/login", data=payload
-            ) as resp:
+            async with self._session.post(f"{self._base}/login", data=payload) as resp:
                 html = await resp.text()
         except aiohttp.ClientError as err:
             raise SolemConnectionError(f"Login request failed: {err}") from err
@@ -181,9 +179,7 @@ class SolemApiClient:
         discovery and read the full record per module via :meth:`async_get_module`.
         """
         await self._ensure_login()
-        data = await self._request_json(
-            "POST", f"/users/{self._user_id}/modules"
-        )
+        data = await self._request_json("POST", f"/users/{self._user_id}/modules")
         modules = data.get("modules", []) if isinstance(data, dict) else []
         return [m["id"] for m in modules if isinstance(m, dict) and m.get("id")]
 
@@ -300,16 +296,12 @@ class SolemApiClient:
         except aiohttp.ClientError as err:
             raise SolemConnectionError(f"{method} {path} failed: {err}") from err
 
-    async def _request_json(
-        self, method: str, path: str, **kwargs: Any
-    ) -> Any:
+    async def _request_json(self, method: str, path: str, **kwargs: Any) -> Any:
         text = await self._request_text(method, path, **kwargs)
         try:
             return json.loads(text)
         except json.JSONDecodeError as err:
-            raise SolemConnectionError(
-                f"{method} {path} did not return JSON"
-            ) from err
+            raise SolemConnectionError(f"{method} {path} did not return JSON") from err
 
     @staticmethod
     def _looks_logged_out(resp: aiohttp.ClientResponse, text: str) -> bool:

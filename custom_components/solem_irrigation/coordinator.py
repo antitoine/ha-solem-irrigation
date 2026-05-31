@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
@@ -13,8 +15,6 @@ from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-
-import aiohttp
 
 from .api import (
     SolemApiClient,
@@ -33,8 +33,6 @@ from .const import (
     STORAGE_KEY,
     STORAGE_VERSION,
 )
-
-import logging
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -204,9 +202,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 try:
                     obj = await self.client.async_get_module(module_id)
                 except SolemError as err:
-                    _LOGGER.warning(
-                        "Could not read module %s: %s", module_id, err
-                    )
+                    _LOGGER.warning("Could not read module %s: %s", module_id, err)
                     continue
                 if not obj:
                     _LOGGER.warning(
@@ -241,7 +237,8 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 )
                 modules[module_id] = module
                 _LOGGER.debug(
-                    "Discovered module %s: name=%s type=%s outputs=%d programs=%d controller=%s",
+                    "Discovered module %s: name=%s type=%s outputs=%d "
+                    "programs=%d controller=%s",
                     module_id,
                     module.name,
                     module.type,
@@ -271,9 +268,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         last_error: SolemConnectionError | None = None
         for module_id in self.modules:
             try:
-                states[module_id] = await self.client.async_get_module_state(
-                    module_id
-                )
+                states[module_id] = await self.client.async_get_module_state(module_id)
             except SolemAuthError as err:
                 raise ConfigEntryAuthFailed(str(err)) from err
             except SolemConnectionError as err:

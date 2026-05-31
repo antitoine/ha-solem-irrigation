@@ -18,11 +18,11 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import config_validation as cv, entity_platform
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -37,7 +37,6 @@ from .const import (
     MAX_RUN_MINUTES,
     MIN_RUN_MINUTES,
     MODE_PROGRAM,
-    MODE_STATION,
     MODE_STOP,
     RUN_MODES,
     SERVICE_RUN,

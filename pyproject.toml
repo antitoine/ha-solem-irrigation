@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["custom_components*"]
+exclude = ["tests", "config"]
+
+[project]
+name = "ha-solem-irrigation"
+version = "0.0.0"
+description = "Home Assistant integration for SOLEM connected irrigation controllers"
+requires-python = ">=3.13"
+authors = [{ name = "antitoine" }]
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest-homeassistant-custom-component",
+    "pytest",
+    "ruff",
+    "mypy",
+    "pre-commit",
+]
+
+[dependency-groups]
+dev = [
+    "aiohttp>=3.9",
+    "aioresponses>=0.7.8",
+    "python-dotenv>=1.2.1",
+    "pytest-cov",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "PL"]
+ignore = ["PLR0913"]
+
+[tool.ruff.lint.per-file-ignores]
+# Asserting against literal values is idiomatic in tests.
+"tests/**" = ["PLR2004"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".git", "config"]
+asyncio_mode = "auto"
+pythonpath = ["."]
+markers = [
+    "integration: tests that require real MySOLEM credentials (skipped without a .env)",
+]
+addopts = "--cov=custom_components.solem_irrigation --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["custom_components/solem_irrigation"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

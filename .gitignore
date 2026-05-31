@@ -2,8 +2,29 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+build/
+dist/
+
+# Virtual environments
 .venv/
 venv/
+
+# Tests / coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Secrets / local config
+.env
+
+# Home Assistant dev container: ignore everything it writes, keep our config.
+config/*
+!config/configuration.yaml
+*.zip
 
 # OS / editor
 .DS_Store
