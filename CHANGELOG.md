@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-31
+
+Surface the two action-only capabilities as device-page controls, so running a
+program and setting a rain delay no longer require the Actions form.
+
+### Added
+
+- **Number** *Run duration* per station (under *Configuration*): how long opening
+  that station's valve runs it. Each station keeps its own duration; an explicit
+  `duration` on the `run` service updates the same value.
+- **Select** *Run program*: pick a stored program to start it now. It resets to
+  a neutral placeholder after each run, so the same program can be picked again
+  (a select never re-fires the option already shown).
+- **Number** *Rain delay* (days): set N to disable irrigation for N days, 0 to
+  re-enable — the visible form of `set_enabled`'s `days`, mirroring SOLEM's
+  "Report de pluie". Assumed-state, restored across restarts.
+
+### Changed
+
+- The remembered manual-run duration is now tracked **per station** (it was a
+  single per-controller value). Opening a station's valve uses that station's
+  *Run duration*, defaulting to 5 min.
+
+The equivalent `solem_irrigation.run` (`mode: program`, `duration`) and
+`solem_irrigation.set_enabled` (`days`) actions remain for automations.
+
 ## [0.3.0] - 2026-05-31
 
 Adopt the standard Home Assistant irrigation model (as used by Hunter Hydrawise):
@@ -108,7 +134,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.1.1...v0.1.2

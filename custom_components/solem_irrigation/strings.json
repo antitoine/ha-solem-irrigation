@@ -34,6 +34,19 @@
         "name": "Irrigation enabled"
       }
     },
+    "select": {
+      "run_program": {
+        "name": "Run program"
+      }
+    },
+    "number": {
+      "rain_delay": {
+        "name": "Rain delay"
+      },
+      "run_duration": {
+        "name": "{station} run duration"
+      }
+    },
     "sensor": {
       "running_station": {
         "name": "Watering station"

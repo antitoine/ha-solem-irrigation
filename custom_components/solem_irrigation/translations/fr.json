@@ -34,6 +34,19 @@
         "name": "Arrosage activé"
       }
     },
+    "select": {
+      "run_program": {
+        "name": "Lancer un programme"
+      }
+    },
+    "number": {
+      "rain_delay": {
+        "name": "Report de pluie"
+      },
+      "run_duration": {
+        "name": "Durée d'arrosage {station}"
+      }
+    },
     "sensor": {
       "running_station": {
         "name": "Station en cours"

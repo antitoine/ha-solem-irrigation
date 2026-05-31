@@ -26,8 +26,11 @@ your account:
 
 | Entity | What it does |
 | --- | --- |
-| **Valve** per station | Open it to water that station for the remembered duration (the controller stops it automatically); close it to stop. Named after the station in MySOLEM. Only one is ever open — the controller waters one station at a time. |
+| **Valve** per station | Open it to water that station for its *Run duration* (the controller stops it automatically); close it to stop. Named after the station in MySOLEM. Only one is ever open — the controller waters one station at a time. |
+| **Number** *Run duration* per station | How long opening that station's valve runs it (minutes). Each station keeps its own. Shown under *Configuration*. |
+| **Select** *Run program* | Pick a stored program to start it now. |
 | **Switch** *Irrigation enabled* | Turn the controller on, or off permanently (assumed state). |
+| **Number** *Rain delay* | Disable for N days (0 = enabled) — SOLEM's "Report de pluie". |
 | **Sensor** *Watering station* | Name of the station currently watering (idle = none). |
 | **Sensor** *Last communication* | Last radio contact with the module. |
 | **Sensor** *Battery* | Battery indicator (battery-powered modules). |
@@ -89,9 +92,10 @@ pool integration, not this one.)
   few seconds to a minute to actually act. The integration updates the UI
   optimistically and then reconciles with the controller on the next poll.
 - State is polled every 5 minutes (polling faster does not give fresher data).
-- The *Irrigation enabled* switch is **assumed state** (the cloud exposes no
-  reliable read-back); its value is restored across restarts. A timed (rain
-  delay) disable likewise cannot be read back.
+- The *Irrigation enabled* switch and the *Rain delay* number are **assumed
+  state** (the cloud exposes no reliable read-back); their values are restored
+  across restarts. They both drive the controller's on/off, so they can show
+  slightly out of sync with each other.
 
 ## Credits
 
