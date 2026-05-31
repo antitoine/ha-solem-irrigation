@@ -1,6 +1,7 @@
 # SOLEM Irrigation for Home Assistant
 
 [![Validate](https://github.com/antitoine/ha-solem-irrigation/actions/workflows/validate.yml/badge.svg)](https://github.com/antitoine/ha-solem-irrigation/actions/workflows/validate.yml)
+[![Test](https://github.com/antitoine/ha-solem-irrigation/actions/workflows/test.yml/badge.svg)](https://github.com/antitoine/ha-solem-irrigation/actions/workflows/test.yml)
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-donate-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/antitoine)
@@ -109,7 +110,8 @@ SOLEM"*).
 
 Bug reports and pull requests are welcome on the
 [issue tracker](https://github.com/antitoine/ha-solem-irrigation/issues).
-See [CHANGELOG.md](CHANGELOG.md) for release history.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup (tests, linting,
+Docker) and [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Support
 
