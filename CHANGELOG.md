@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-31
+
+Quality and maintainability release. No functional changes to the integration —
+the entities, services and behaviour are identical to 0.4.1.
+
+### Added
+
+- **Automated test suite** (`pytest` + `pytest-homeassistant-custom-component`)
+  covering the MySOLEM API client, the coordinator, the config flow,
+  setup / legacy-entity migration, and every entity platform.
+- **Continuous integration**: a *Test* workflow (ruff lint + format check +
+  pytest with coverage) and a *Release* workflow that builds the installable
+  zip, alongside the existing hassfest / HACS validation.
+- **Contributor tooling**: pre-commit hooks, a `uv`-managed dev environment
+  (`pyproject.toml`), a Docker Compose dev setup, GitHub issue templates, and
+  `AGENTS.md` / `CLAUDE.md` / `CONTRIBUTING.md` guides.
+
 ## [0.4.1] - 2026-05-31
 
 ### Fixed
@@ -144,7 +161,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.2.0...v0.3.0
