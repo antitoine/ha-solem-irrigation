@@ -47,6 +47,11 @@
         "name": "{station} run duration"
       }
     },
+    "button": {
+      "stop": {
+        "name": "Stop watering"
+      }
+    },
     "sensor": {
       "running_station": {
         "name": "Watering station"

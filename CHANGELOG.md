@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-31
+
+### Fixed
+
+- **Could not stop a running program.** Starting a program doesn't open a
+  specific valve, so there was no obvious way to stop it from the device page.
+  Added a global **Stop** button (*Arrêter l'arrosage*) per controller that stops
+  anything running — a program or a manual station run. (Closing a station valve
+  still stops that station; `solem_irrigation.run` with `mode: stop` also works.)
+
 ## [0.4.0] - 2026-05-31
 
 Surface the two action-only capabilities as device-page controls, so running a
@@ -134,7 +144,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.1.2...v0.2.0

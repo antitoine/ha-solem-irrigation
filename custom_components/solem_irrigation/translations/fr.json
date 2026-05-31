@@ -47,6 +47,11 @@
         "name": "Durée d'arrosage {station}"
       }
     },
+    "button": {
+      "stop": {
+        "name": "Arrêter l'arrosage"
+      }
+    },
     "sensor": {
       "running_station": {
         "name": "Station en cours"

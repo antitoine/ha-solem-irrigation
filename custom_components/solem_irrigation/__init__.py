@@ -14,6 +14,7 @@ PLATFORMS: list[Platform] = [
     Platform.VALVE,
     Platform.SELECT,
     Platform.NUMBER,
+    Platform.BUTTON,
     Platform.SENSOR,
 ]
 
@@ -21,12 +22,13 @@ PLATFORMS: list[Platform] = [
 # control surface no longer provides. They are removed on setup so they do not
 # linger as "unavailable" entities after an upgrade:
 #   <= 0.1.x : station switches (_station_), program buttons (_program_),
-#              stop button (_stop), Run-duration number (_run_duration).
+#              single Run-duration number (_run_duration).
 #   0.2.x    : the "Manual run" select (_manual_run), replaced by station valves.
-# NB: ``_rain_delay`` is intentionally NOT listed — the Rain-delay number is a
-# current entity again (v0.4.0); ``_run_program`` is the current select.
+# Intentionally NOT listed (current entities): ``_rain_delay`` (Rain-delay
+# number), ``_run_program`` (Run-program select), ``_stop`` (Stop button, back
+# in 0.4.1), and per-station ``_run_duration_<id>`` (does not end in
+# ``_run_duration``).
 _LEGACY_UNIQUE_ID_SUFFIXES = (
-    "_stop",
     "_run_duration",
     "_manual_run",
 )

@@ -29,6 +29,7 @@ your account:
 | **Valve** per station | Open it to water that station for its *Run duration* (the controller stops it automatically); close it to stop. Named after the station in MySOLEM. Only one is ever open — the controller waters one station at a time. |
 | **Number** *Run duration* per station | How long opening that station's valve runs it (minutes). Each station keeps its own. Shown under *Configuration*. |
 | **Select** *Run program* | Pick a stored program to start it now. |
+| **Button** *Stop watering* | Stop anything running — a manual station run or a program. |
 | **Switch** *Irrigation enabled* | Turn the controller on, or off permanently (assumed state). |
 | **Number** *Rain delay* | Disable for N days (0 = enabled) — SOLEM's "Report de pluie". |
 | **Sensor** *Watering station* | Name of the station currently watering (idle = none). |
