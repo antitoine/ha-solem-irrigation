@@ -34,12 +34,9 @@
         "name": "Arrosage activé"
       }
     },
-    "number": {
-      "run_duration": {
-        "name": "Durée d'arrosage"
-      },
-      "rain_delay": {
-        "name": "Report de pluie"
+    "select": {
+      "manual_run": {
+        "name": "Commande manuelle"
       }
     },
     "sensor": {
@@ -52,10 +49,43 @@
       "battery": {
         "name": "Batterie"
       }
+    }
+  },
+  "services": {
+    "set_enabled": {
+      "name": "Activer / désactiver",
+      "description": "Active l'arrosage, le désactive définitivement, ou le désactive pour un nombre de jours (report de pluie).",
+      "fields": {
+        "enabled": {
+          "name": "Activé",
+          "description": "Activer l'arrosage (true) ou le désactiver (false)."
+        },
+        "days": {
+          "name": "Jours",
+          "description": "Lors d'une désactivation, nombre de jours d'arrêt (report de pluie). 0 ou vide = arrêt définitif."
+        }
+      }
     },
-    "button": {
-      "stop": {
-        "name": "Arrêter l'arrosage"
+    "run": {
+      "name": "Lancer une action manuelle",
+      "description": "Arrête l'arrosage, ou démarre un programme ou une station.",
+      "fields": {
+        "mode": {
+          "name": "Action",
+          "description": "Que faire : arrêter, lancer un programme, ou lancer une station."
+        },
+        "program": {
+          "name": "Programme",
+          "description": "Programme à lancer (nom ou index). Requis lorsque l'action est « program »."
+        },
+        "station": {
+          "name": "Station",
+          "description": "Station à lancer (nom ou index). Requis lorsque l'action est « station »."
+        },
+        "duration": {
+          "name": "Durée",
+          "description": "Durée d'arrosage en minutes pour une station. Par défaut, la dernière valeur utilisée ; une valeur explicite est mémorisée pour la prochaine fois."
+        }
       }
     }
   }

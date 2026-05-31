@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 import aiohttp
@@ -29,6 +30,8 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     REGION_EUROPE,
+    STORAGE_KEY,
+    STORAGE_VERSION,
 )
 
 import logging
@@ -56,6 +59,27 @@ class SolemProgram:
     index: int
 
 
+def _find_by_token(
+    items: list[SolemStation] | list[SolemProgram], token: str | int
+) -> Any:
+    """Resolve a station/program by name (case-insensitive) or numeric index.
+
+    Used by the ``solem_irrigation.run`` service so a user can write either the
+    human name ("Pelouse 1") or the index the controller uses for it.
+    """
+    text = str(token).strip()
+    if text.isdigit():
+        index = int(text)
+        for item in items:
+            if item.index == index:
+                return item
+    folded = text.casefold()
+    for item in items:
+        if item.name.casefold() == folded:
+            return item
+    return None
+
+
 @dataclass(slots=True)
 class SolemModule:
     """Static description of a module (controller, gateway, sensor…)."""
@@ -81,6 +105,14 @@ class SolemModule:
         """
         return bool(self.stations) and bool(self.raw.get("typeIsWatering"))
 
+    def find_station(self, token: str | int) -> SolemStation | None:
+        """Return the station matching ``token`` (name or index), if any."""
+        return _find_by_token(self.stations, token)
+
+    def find_program(self, token: str | int) -> SolemProgram | None:
+        """Return the program matching ``token`` (name or index), if any."""
+        return _find_by_token(self.programs, token)
+
 
 class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
     """Coordinate one MySOLEM account: discover modules, poll live state."""
@@ -104,9 +136,13 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
             region=entry.data.get(CONF_REGION, REGION_EUROPE),
         )
         self.modules: dict[str, SolemModule] = {}
-        # Run duration (minutes) applied when a station switch is turned on.
-        # Set by the "Run duration" number entity, read by the station switches.
+        # Manual-run duration (minutes), per controller. Seeded with a default and
+        # then updated to the last value passed to the ``run`` service, so manual
+        # runs "remember" the duration. Persisted via ``_store``.
         self.run_minutes: dict[str, int] = {}
+        self._store: Store[dict[str, int]] = Store(
+            hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry.entry_id}"
+        )
         self._refresh_unsub: Callable[[], None] | None = None
         entry.async_on_unload(self._cancel_scheduled_refresh)
 
@@ -134,14 +170,24 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         self._refresh_unsub = async_call_later(self.hass, delay, _do_refresh)
 
     def get_run_minutes(self, module_id: str) -> int:
-        """Return the configured manual run duration for a module (minutes)."""
+        """Return the remembered manual run duration for a module (minutes)."""
         return self.run_minutes.get(module_id, DEFAULT_RUN_MINUTES)
+
+    async def async_set_run_minutes(self, module_id: str, minutes: int) -> None:
+        """Remember a manual-run duration for a module and persist it."""
+        self.run_minutes[module_id] = int(minutes)
+        await self._store.async_save(self.run_minutes)
 
     async def async_setup(self) -> None:
         """Log in and discover modules and their stations/programs.
 
         Called once before the first refresh.
         """
+        stored = await self._store.async_load()
+        if stored:
+            self.run_minutes.update(
+                {k: int(v) for k, v in stored.items() if v is not None}
+            )
         try:
             await self.client.async_login()
             module_ids = await self.client.async_get_module_ids()

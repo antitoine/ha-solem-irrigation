@@ -34,12 +34,9 @@
         "name": "Irrigation enabled"
       }
     },
-    "number": {
-      "run_duration": {
-        "name": "Run duration"
-      },
-      "rain_delay": {
-        "name": "Rain delay"
+    "select": {
+      "manual_run": {
+        "name": "Manual run"
       }
     },
     "sensor": {
@@ -52,10 +49,43 @@
       "battery": {
         "name": "Battery"
       }
+    }
+  },
+  "services": {
+    "set_enabled": {
+      "name": "Set enabled",
+      "description": "Turns irrigation on, off permanently, or off for a number of days (rain delay).",
+      "fields": {
+        "enabled": {
+          "name": "Enabled",
+          "description": "Turn irrigation on (true) or off (false)."
+        },
+        "days": {
+          "name": "Days",
+          "description": "When turning off, how many days to stay off (rain delay). 0 or omitted means off permanently."
+        }
+      }
     },
-    "button": {
-      "stop": {
-        "name": "Stop watering"
+    "run": {
+      "name": "Run manual action",
+      "description": "Stops watering, or starts a program or a station.",
+      "fields": {
+        "mode": {
+          "name": "Action",
+          "description": "What to do: stop, run a program, or run a station."
+        },
+        "program": {
+          "name": "Program",
+          "description": "Program to run (name or index). Required when the action is 'program'."
+        },
+        "station": {
+          "name": "Station",
+          "description": "Station to run (name or index). Required when the action is 'station'."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "Run time in minutes for a station. Defaults to the last used value; an explicit value is remembered for next time."
+        }
       }
     }
   }

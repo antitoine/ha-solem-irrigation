@@ -20,19 +20,26 @@ Bluetooth-only community integrations cannot reach.
 
 ## Features
 
+The control surface mirrors the SOLEM app: one on/off and one manual command.
 For each irrigation controller on your account:
 
 | Entity | What it does |
 | --- | --- |
-| **Switch** per station | Turn on → run that station for the configured duration. Turn off → stop. Only one station runs at a time. Named after the station's name in MySOLEM. |
-| **Switch** *Irrigation enabled* | Enable / disable the controller (assumed state). |
-| **Number** *Run duration* | Minutes used when a station switch is turned on. |
-| **Number** *Rain delay* | Disable for N days (0 = enabled). |
-| **Button** *Run &lt;program&gt;* | Start a stored program (one button per program defined in MySOLEM). |
-| **Button** *Stop watering* | Global stop. |
+| **Switch** *Irrigation enabled* | Turn the controller on, or off permanently (assumed state). |
+| **Select** *Manual run* | One dropdown to **Stop**, run any program, or run any station. Stations run for the remembered duration; it also shows the station currently watering. |
 | **Sensor** *Watering station* | Name of the station currently watering (idle = none). |
 | **Sensor** *Last communication* | Last radio contact with the module. |
 | **Sensor** *Battery* | Battery indicator (battery-powered modules). |
+
+### Actions (services)
+
+| Action | What it does |
+| --- | --- |
+| `solem_irrigation.run` | The manual command for automations: `mode` (`stop` / `program` / `station`) plus `program`, `station`, and `duration` (minutes). An explicit `duration` is remembered for the next run. |
+| `solem_irrigation.set_enabled` | The on/off command: `enabled` (true/false) plus an optional `days` to disable for a period (rain delay; `0`/omitted = permanent). |
+
+Only one station or program runs at a time, which is why the manual command is a
+single dropdown rather than a switch per station.
 
 Every module (including the gateway) appears as a Home Assistant **device**;
 controllers are linked to the gateway they communicate through.
@@ -76,13 +83,13 @@ pool integration, not this one.)
 ## How it works / limitations
 
 - Commands travel **cloud → LR-MB gateway → LoRa downlink → controller**. LoRa
-  is duty-cycle limited, so a switch you toggle in Home Assistant can take a
+  is duty-cycle limited, so a command you trigger in Home Assistant can take a
   few seconds to a minute to actually act. The integration updates the UI
   optimistically and then reconciles with the controller on the next poll.
 - State is polled every 5 minutes (polling faster does not give fresher data).
-- The *Irrigation enabled* switch and *Rain delay* number are **assumed state**
-  (the cloud exposes no reliable read-back); their values are restored across
-  restarts.
+- The *Irrigation enabled* switch is **assumed state** (the cloud exposes no
+  reliable read-back); its value is restored across restarts. A timed (rain
+  delay) disable likewise cannot be read back.
 
 ## Credits
 

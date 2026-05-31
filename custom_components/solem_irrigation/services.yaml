@@ -1,0 +1,55 @@
+set_enabled:
+  target:
+    entity:
+      integration: solem_irrigation
+      domain: switch
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+    days:
+      required: false
+      example: 3
+      selector:
+        number:
+          min: 0
+          max: 30
+          unit_of_measurement: days
+          mode: box
+
+run:
+  target:
+    entity:
+      integration: solem_irrigation
+      domain: select
+  fields:
+    mode:
+      required: true
+      default: station
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - stop
+            - program
+            - station
+    program:
+      required: false
+      example: Pelouse
+      selector:
+        text:
+    station:
+      required: false
+      example: Pelouse 1
+      selector:
+        text:
+    duration:
+      required: false
+      example: 10
+      selector:
+        number:
+          min: 1
+          max: 720
+          unit_of_measurement: min
+          mode: box

@@ -1,25 +1,32 @@
 """Switch platform for SOLEM irrigation.
 
-* One switch per station: turning it on runs that station for the configured
-  duration; turning it off sends a global stop. The controller waters one
-  station at a time, so at most one is "on".
-* One master switch per controller: enable / disable the controller.
+A single master switch per controller enables / disables it. Turning it off
+disables permanently; the ``solem_irrigation.set_enabled`` service additionally
+accepts ``days`` to disable for a period (the rain-delay path).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+import voluptuous as vol
+
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
+from .const import (
+    ATTR_DAYS,
+    ATTR_ENABLED,
+    MAX_RAIN_DELAY_DAYS,
+    SERVICE_SET_ENABLED,
+)
 from .coordinator import (
     SolemConfigEntry,
     SolemDataUpdateCoordinator,
     SolemModule,
-    SolemStation,
 )
 from .entity import SolemModuleEntity
 
@@ -29,61 +36,25 @@ async def async_setup_entry(
     entry: SolemConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up SOLEM switches."""
+    """Set up the SOLEM enable switch and the ``set_enabled`` service."""
     coordinator = entry.runtime_data
-    entities: list[SwitchEntity] = []
-    for module in coordinator.modules.values():
-        if not module.is_controller:
-            continue
-        entities.append(SolemEnableSwitch(coordinator, module))
-        entities.extend(
-            SolemStationSwitch(coordinator, module, station)
-            for station in module.stations
-        )
-    async_add_entities(entities)
+    async_add_entities(
+        SolemEnableSwitch(coordinator, module)
+        for module in coordinator.modules.values()
+        if module.is_controller
+    )
 
-
-class SolemStationSwitch(SolemModuleEntity, SwitchEntity):
-    """A single watering station."""
-
-    _attr_icon = "mdi:sprinkler"
-
-    def __init__(
-        self,
-        coordinator: SolemDataUpdateCoordinator,
-        module: SolemModule,
-        station: SolemStation,
-    ) -> None:
-        """Initialise the station switch."""
-        super().__init__(coordinator, module)
-        self._station = station
-        self._attr_unique_id = f"{module.id}_station_{station.id}"
-        self._attr_name = station.name
-
-    @property
-    def is_on(self) -> bool:
-        """True when this station is the one currently watering."""
-        return (
-            self.coordinator.running_station_index(self._module_id)
-            == self._station.index
-        )
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Run this station for the configured duration."""
-        minutes = self.coordinator.get_run_minutes(self._module_id)
-        await self.coordinator.client.async_run_station(
-            self._serial, self._station.id, minutes
-        )
-        self.coordinator.apply_optimistic_running_station(
-            self._module_id, self._station.index
-        )
-        self.coordinator.async_schedule_refresh()
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Stop watering (global stop)."""
-        await self.coordinator.client.async_stop(self._serial)
-        self.coordinator.apply_optimistic_running_station(self._module_id, 0)
-        self.coordinator.async_schedule_refresh()
+    platform = entity_platform.async_get_current_platform()
+    platform.async_register_entity_service(
+        SERVICE_SET_ENABLED,
+        {
+            vol.Required(ATTR_ENABLED): cv.boolean,
+            vol.Optional(ATTR_DAYS): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=MAX_RAIN_DELAY_DAYS)
+            ),
+        },
+        "async_set_enabled",
+    )
 
 
 class SolemEnableSwitch(SolemModuleEntity, SwitchEntity, RestoreEntity):
@@ -118,14 +89,22 @@ class SolemEnableSwitch(SolemModuleEntity, SwitchEntity, RestoreEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable the controller."""
-        await self.coordinator.client.async_set_status(self._serial, enabled=True)
-        self._is_on = True
-        self.async_write_ha_state()
+        await self.async_set_enabled(enabled=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable the controller permanently."""
+        await self.async_set_enabled(enabled=False, days=0)
+
+    async def async_set_enabled(self, enabled: bool, days: int = 0) -> None:
+        """Apply the global on/off command.
+
+        ``enabled=True`` turns the controller on. ``enabled=False`` disables it:
+        ``days=0`` is permanent, ``days>0`` disables it for that many days (the
+        rain-delay). Exposed both via the switch toggle and the
+        ``solem_irrigation.set_enabled`` service.
+        """
         await self.coordinator.client.async_set_status(
-            self._serial, enabled=False, days=0
+            self._serial, enabled=enabled, days=days
         )
-        self._is_on = False
+        self._is_on = enabled
         self.async_write_ha_state()
