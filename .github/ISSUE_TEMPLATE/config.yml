@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation & troubleshooting
+    url: https://github.com/antitoine/ha-solem-irrigation#readme
+    about: Check the README for setup, features and how the integration works before opening an issue.

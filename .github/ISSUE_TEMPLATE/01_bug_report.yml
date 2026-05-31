@@ -1,0 +1,68 @@
+name: Bug Report
+description: Report a problem with the SOLEM Irrigation integration
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: input
+    id: version
+    attributes:
+      label: Integration Version
+      description: Which version of the integration are you running? (HACS shows it on the integration page.)
+      placeholder: v0.5.0
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant Version
+      description: Found under Settings → About.
+      placeholder: 2026.5.0
+    validations:
+      required: true
+  - type: dropdown
+    id: region
+    attributes:
+      label: MySOLEM Region
+      description: Which region do you log in with on mysolem.com?
+      options:
+        - Europe
+        - America
+    validations:
+      required: true
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Open the controller device page
+        2. Open the "Pelouse 1" valve
+        3. ...
+        4. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug Logs
+      description: |
+        Please enable debug logging, reproduce the issue, and paste the relevant logs.
+        Add the following to your `configuration.yaml` and restart Home Assistant:
+        ```yaml
+        logger:
+          default: info
+          logs:
+            custom_components.solem_irrigation: debug
+        ```
+      render: shell

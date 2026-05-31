@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and upload release asset
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Extract version from tag
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Inject version into manifest.json
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd custom_components/solem_irrigation
+          jq --arg v "$VERSION" '.version = $v' manifest.json > manifest.tmp
+          mv manifest.tmp manifest.json
+
+      - name: Build zip
+        run: |
+          cd custom_components/solem_irrigation
+          zip -r ../../solem_irrigation.zip . -x '*.pyc' -x '__pycache__/*'
+
+      - name: Upload zip to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: solem_irrigation.zip
