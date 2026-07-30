@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Flow meter (débitmètre) support.** A controller with a flow meter now gets two
+  sensors per meter:
+  - ***&lt;meter&gt; water used*** — SOLEM's lifetime water counter, as a
+    `total_increasing` volume with the `water` device class, so it can be added
+    to the Home Assistant **Water** dashboard. Because the counter is SOLEM's own
+    and not accumulated locally, restarting Home Assistant never double-counts.
+  - ***&lt;meter&gt; flow rate*** — how fast water is flowing right now, in
+    L/min (or gal/min). Non-zero outside a watering run is the signal a leak
+    would produce. The meter only records while water flows, so the rate is
+    derived from its most recent readings: it reads `0` when idle and may be
+    briefly unknown in the first minute of a run.
+
+  The meter's configuration (measurement interval, thresholds, leak-alert volume,
+  each station's nominal flow) and SOLEM's own probe flags are exposed as
+  attributes of the *water used* sensor. Meters on pool modules are ignored, as
+  those modules already are.
+
 ## [0.5.0] - 2026-05-31
 
 Quality and maintainability release. No functional changes to the integration —

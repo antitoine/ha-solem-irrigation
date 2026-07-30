@@ -15,8 +15,13 @@ import aiohttp
 import pytest
 import yaml
 from dotenv import load_dotenv
+from homeassistant.util import dt as dt_util
 
-from custom_components.solem_irrigation.api import SolemApiClient
+from custom_components.solem_irrigation.api import SolemApiClient, apply_expression
+from custom_components.solem_irrigation.const import (
+    FLOW_WINDOW,
+    INPUT_TYPE_FLOW_METER,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPONENT = ROOT / "custom_components" / "solem_irrigation"
@@ -85,3 +90,52 @@ async def test_live_login_and_discovery():
         assert user_id
         module_ids = await client.async_get_module_ids()
         assert isinstance(module_ids, list)
+
+
+@pytest.mark.integration
+async def test_live_flow_meter_reading():
+    """Read a real flow meter end to end, if the account has one.
+
+    Guards the two things a mocked test cannot: that the module page still
+    embeds ``var inputs``, and that the newest tick scales into a plausible
+    volume via the meter's own expression.
+    """
+    load_dotenv()
+    email = os.getenv("email")
+    password = os.getenv("password")
+    region = os.getenv("region", "Europe")
+    if not email or not password:
+        pytest.skip("Missing MySOLEM credentials in .env")
+
+    async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar()) as session:
+        client = SolemApiClient(session, email=email, password=password, region=region)
+        await client.async_login()
+        meters: list[tuple[dict, dict]] = []
+        for module_id in await client.async_get_module_ids():
+            module, inputs = await client.async_get_module_page(module_id)
+            # A module declaring inputs must yield them, or the scrape has rotted.
+            if int(module.get("numberOfInputs", 0) or 0) > 0:
+                assert inputs, f"module {module_id} declares inputs but none parsed"
+            meters += [
+                (module, record)
+                for record in inputs
+                if record.get("type") == INPUT_TYPE_FLOW_METER
+            ]
+
+        if not meters:
+            pytest.skip("No flow meter on this account")
+
+        for module, record in meters:
+            tick = await client.async_get_last_input_tick(record["id"])
+            assert tick, f"flow meter {record['id']} has never reported"
+            volume = apply_expression(record.get("expression"), float(tick["value"]))
+            assert volume is not None and volume >= 0
+            assert dt_util.parse_datetime(tick["timestamp"]) is not None
+            # The windowed series must agree with the record we scraped.
+            now = dt_util.utcnow()
+            series = await client.async_get_module_sensor_data(
+                module["id"],
+                (now - FLOW_WINDOW).isoformat().replace("+00:00", "Z"),
+                now.isoformat().replace("+00:00", "Z"),
+            )
+            assert any(r.get("id") == record["id"] for r in series)

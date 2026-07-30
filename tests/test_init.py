@@ -31,7 +31,10 @@ _LOGIN = "custom_components.solem_irrigation.coordinator.SolemApiClient.async_lo
 _IDS = (
     "custom_components.solem_irrigation.coordinator.SolemApiClient.async_get_module_ids"
 )
-_GET = "custom_components.solem_irrigation.coordinator.SolemApiClient.async_get_module"
+_GET = (
+    "custom_components.solem_irrigation.coordinator."
+    "SolemApiClient.async_get_module_page"
+)
 _STATE = (
     "custom_components.solem_irrigation.coordinator."
     "SolemApiClient.async_get_module_state"
@@ -60,7 +63,7 @@ async def test_setup_and_unload_entry(hass: HomeAssistant, entry) -> None:
     with (
         patch(_LOGIN, AsyncMock(return_value="uid")),
         patch(_IDS, AsyncMock(return_value=["m1"])),
-        patch(_GET, AsyncMock(return_value=CONTROLLER)),
+        patch(_GET, AsyncMock(return_value=(CONTROLLER, []))),
         patch(_STATE, AsyncMock(return_value={})),
         patch(
             "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",

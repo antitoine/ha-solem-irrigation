@@ -65,3 +65,25 @@ RUN_MODES = [MODE_STOP, MODE_PROGRAM, MODE_STATION]
 # "Run duration" number entity, which persisted via RestoreNumber).
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.run_minutes"
+
+# Sensor inputs ---------------------------------------------------------------
+# A module's sensors are "inputs". SOLEM's own web app identifies a flow meter
+# by type (its bundle declares ``flowMeterSensors = [1]``).
+INPUT_TYPE_FLOW_METER = 1
+
+# Reading unit, as reported by an input's ``unit`` field. SOLEM stores volumes
+# in whichever of these the meter was configured with and converts for display.
+INPUT_UNIT_LITRE = 1
+INPUT_UNIT_GALLON = 3
+
+# Minutes between ticks when an input does not declare its own ``interval``.
+DEFAULT_INPUT_INTERVAL = 1
+
+# How far back to ask for ticks when deriving the current flow rate. Only needs
+# to cover a couple of ticks; a wider window is just a bigger response.
+FLOW_WINDOW = timedelta(minutes=15)
+
+# Treat the meter as idle once its newest tick is older than this. Must stay at
+# or above the poll interval: ticks reach the cloud with ~80s of upload lag, so
+# a tighter bound would intermittently report 0 during active watering.
+FLOW_IDLE_AFTER = DEFAULT_SCAN_INTERVAL

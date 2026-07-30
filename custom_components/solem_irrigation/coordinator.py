@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import aiohttp
@@ -15,20 +16,26 @@ from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import (
     SolemApiClient,
     SolemAuthError,
     SolemConnectionError,
     SolemError,
+    apply_expression,
 )
 from .const import (
     CONF_EMAIL,
     CONF_PASSWORD,
     CONF_REGION,
+    DEFAULT_INPUT_INTERVAL,
     DEFAULT_RUN_MINUTES,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    FLOW_IDLE_AFTER,
+    FLOW_WINDOW,
+    INPUT_TYPE_FLOW_METER,
     REGION_EUROPE,
     STORAGE_KEY,
     STORAGE_VERSION,
@@ -37,6 +44,11 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 type SolemConfigEntry = ConfigEntry[SolemDataUpdateCoordinator]
+
+# A rate needs two ticks, and they must be adjacent enough to belong to the same
+# stretch of flow rather than sit either side of a pause.
+MIN_TICKS_FOR_RATE = 2
+MAX_TICK_GAP_INTERVALS = 2
 
 
 @dataclass(slots=True)
@@ -55,6 +67,116 @@ class SolemProgram:
     id: str
     name: str
     index: int
+
+
+@dataclass(slots=True)
+class SolemFlowMeter:
+    """A flow meter wired to a module (the API calls these ``inputs``)."""
+
+    id: str
+    name: str
+    index: int
+    unit: int
+    expression: str
+    interval: int
+    raw: dict[str, Any]
+
+
+@dataclass(slots=True)
+class SolemFlowReading:
+    """The latest reading of a flow meter.
+
+    ``volume`` is SOLEM's lifetime counter in the meter's own unit. ``rate`` is
+    derived from consecutive ticks and is None while it cannot be determined
+    (which is not the same as zero).
+    """
+
+    volume: float
+    raw_volume: float
+    timestamp: datetime
+    rate: float | None
+    record: dict[str, Any]
+
+
+def _build_flow_meters(inputs: list[dict[str, Any]]) -> list[SolemFlowMeter]:
+    """Pick the flow meters out of a module's inputs, in index order."""
+    meters: list[SolemFlowMeter] = []
+    for record in sorted(inputs, key=lambda r: int(r.get("index", 0) or 0)):
+        if record.get("type") != INPUT_TYPE_FLOW_METER:
+            continue
+        expression = record.get("expression") or ""
+        if apply_expression(expression, 1.0) is None:
+            # Publishing a mis-scaled cumulative value would poison long-term
+            # statistics, which a user cannot easily purge. Skip it instead.
+            _LOGGER.warning(
+                "Ignoring SOLEM flow meter %s: unsupported scaling expression %r",
+                record["id"],
+                expression,
+            )
+            continue
+        meters.append(
+            SolemFlowMeter(
+                id=record["id"],
+                name=record.get("name")
+                or record.get("getName")
+                or f"Flow meter {record.get('index', '?')}",
+                index=int(record.get("index", 0) or 0),
+                unit=int(record.get("unit", 0) or 0),
+                expression=expression,
+                interval=int(record.get("interval", 0) or 0) or DEFAULT_INPUT_INTERVAL,
+                raw=record,
+            )
+        )
+    return meters
+
+
+def _usable_ticks(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the ticks of ``record`` that a rate may be derived from.
+
+    Interpolated ticks are synthesised by the cloud, and a tick flagged
+    ``lastTickBeforeStartDate`` sits outside the window for continuity; a delta
+    across either would be fabricated flow.
+    """
+    return [
+        tick
+        for tick in record.get("computedSensorData") or []
+        if isinstance(tick, dict)
+        and not tick.get("interpolated")
+        and tick.get("flag") != "lastTickBeforeStartDate"
+        and tick.get("tickTimestamp")
+        and tick.get("value") is not None
+    ]
+
+
+def _compute_flow_rate(
+    record: dict[str, Any], now: datetime, interval: int
+) -> float | None:
+    """Derive the current flow rate (unit per minute) from a window of ticks.
+
+    Ticks are only recorded while water actually flows, so an empty window means
+    the meter has been idle throughout it. Deriving the rate from the window
+    (rather than from a delta between polls) is what keeps it honest: a delta
+    spanning a pause would divide real flow by hours of idleness and report a
+    confident fraction of the true rate.
+    """
+    ticks = _usable_ticks(record)
+    if not ticks:
+        return 0.0
+    timestamps = [dt_util.parse_datetime(t["tickTimestamp"]) for t in ticks]
+    if timestamps[-1] is None:
+        return None
+    if now - timestamps[-1] > FLOW_IDLE_AFTER:
+        return 0.0
+    if len(ticks) < MIN_TICKS_FOR_RATE or timestamps[-2] is None:
+        return None
+    elapsed = (timestamps[-1] - timestamps[-2]).total_seconds() / 60
+    # A duplicate or out-of-order tick would otherwise divide by zero, and ticks
+    # further apart than a couple of intervals straddle a pause in the flow.
+    if not 0 < elapsed <= MAX_TICK_GAP_INTERVALS * interval:
+        return None
+    # max() absorbs a counter rollover so the rate never reads negative.
+    delta = max(0.0, float(ticks[-1]["value"]) - float(ticks[-2]["value"]))
+    return round(delta / elapsed, 2)
 
 
 def _find_by_token(
@@ -90,6 +212,7 @@ class SolemModule:
     raw: dict[str, Any]
     stations: list[SolemStation] = field(default_factory=list)
     programs: list[SolemProgram] = field(default_factory=list)
+    flow_meters: list[SolemFlowMeter] = field(default_factory=list)
 
     @property
     def is_controller(self) -> bool:
@@ -139,6 +262,10 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         # number (and by an explicit ``run`` service ``duration``). Persisted via
         # ``_store`` and seeded with ``DEFAULT_RUN_MINUTES`` per station.
         self.run_minutes: dict[str, int] = {}
+        # Latest flow-meter reading, keyed by **flow meter (input) id**. Held
+        # here rather than in ``data`` because it comes from its own endpoints,
+        # not from the module state poll -- same reasoning as ``run_minutes``.
+        self.flow: dict[str, SolemFlowReading] = {}
         self._store: Store[dict[str, int]] = Store(
             hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry.entry_id}"
         )
@@ -200,7 +327,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 # A non-controller (gateway, sensor) or a transient hiccup must
                 # not abort discovery of the rest of the fleet.
                 try:
-                    obj = await self.client.async_get_module(module_id)
+                    obj, inputs = await self.client.async_get_module_page(module_id)
                 except SolemError as err:
                     _LOGGER.warning("Could not read module %s: %s", module_id, err)
                     continue
@@ -209,6 +336,16 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                         "Module %s returned no parseable data; skipping", module_id
                     )
                     continue
+                if not inputs and int(obj.get("numberOfInputs", 0) or 0) > 0:
+                    # The inputs are scraped from an embedded ``var inputs``
+                    # array. If SOLEM ever renames it, parsing yields nothing and
+                    # the sensors silently disappear -- so say so out loud.
+                    _LOGGER.warning(
+                        "Module %s declares %s input(s) but none could be parsed; "
+                        "flow-meter sensors will be missing",
+                        module_id,
+                        obj.get("numberOfInputs"),
+                    )
                 module = SolemModule(
                     id=module_id,
                     name=obj.get("name", module_id),
@@ -234,16 +371,18 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                         for p in (obj.get("programs") or [])
                         if p.get("id")
                     ],
+                    flow_meters=_build_flow_meters(inputs),
                 )
                 modules[module_id] = module
                 _LOGGER.debug(
                     "Discovered module %s: name=%s type=%s outputs=%d "
-                    "programs=%d controller=%s",
+                    "programs=%d flow_meters=%d controller=%s",
                     module_id,
                     module.name,
                     module.type,
                     len(module.stations),
                     len(module.programs),
+                    len(module.flow_meters),
                     module.is_controller,
                 )
             self.modules = modules
@@ -279,7 +418,68 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         # Only treat the cycle as failed if nothing at all came back.
         if last_error is not None and not any(states.values()):
             raise UpdateFailed(str(last_error))
+
+        # Flow meters live on their own endpoints. A failure here never fails
+        # the cycle: the watering state above stays the sole authority.
+        for module_id in self.relevant_module_ids():
+            if self.modules[module_id].flow_meters:
+                await self._async_poll_flow(module_id)
         return states
+
+    async def _async_poll_flow(self, module_id: str) -> None:
+        """Refresh every flow-meter reading on a module.
+
+        The cumulative total comes from each meter's newest tick (which the cloud
+        always answers with, however old it is) while the rate is derived from a
+        short window of ticks. On failure the previous reading is kept: blanking
+        a cumulative water sensor punches a hole in long-term statistics.
+        """
+        module = self.modules[module_id]
+        now = dt_util.utcnow()
+        try:
+            records = await self.client.async_get_module_sensor_data(
+                module_id,
+                (now - FLOW_WINDOW).isoformat().replace("+00:00", "Z"),
+                now.isoformat().replace("+00:00", "Z"),
+            )
+        except SolemAuthError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+        except SolemConnectionError as err:
+            _LOGGER.debug("Flow window fetch failed for %s: %s", module_id, err)
+            records = []
+        by_id = {r["id"]: r for r in records if r.get("id")}
+
+        for meter in module.flow_meters:
+            try:
+                tick = await self.client.async_get_last_input_tick(meter.id)
+            except SolemAuthError as err:
+                raise ConfigEntryAuthFailed(str(err)) from err
+            except SolemConnectionError as err:
+                _LOGGER.debug("Tick fetch failed for meter %s: %s", meter.id, err)
+                continue
+
+            raw_value = tick.get("value")
+            timestamp = dt_util.parse_datetime(tick.get("timestamp") or "")
+            if raw_value is None or timestamp is None:
+                # A meter that has never reported: leave it unknown rather than
+                # inventing a zero that would land in long-term statistics.
+                continue
+            volume = apply_expression(meter.expression, float(raw_value))
+            if volume is None:
+                continue
+
+            record = by_id.get(meter.id, {})
+            self.flow[meter.id] = SolemFlowReading(
+                volume=volume,
+                raw_volume=float(raw_value),
+                timestamp=dt_util.as_utc(timestamp),
+                rate=_compute_flow_rate(record, now, meter.interval),
+                record=record or meter.raw,
+            )
+
+    def flow_reading(self, meter_id: str) -> SolemFlowReading | None:
+        """Return the latest reading for a flow meter, if one has arrived."""
+        return self.flow.get(meter_id)
 
     # -- helpers used by entities ------------------------------------------
 
@@ -288,8 +488,17 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
 
         Keeps pool modules on the same account (handled by other integrations)
         out of Home Assistant.
+
+        A watering module carrying a flow meter is already a controller. SOLEM
+        also sells the meter as a module of its own (lr-fl and friends), which is
+        not a watering type, so those are admitted on the strength of their
+        meters -- untested, as I only have the controller-attached topology.
         """
-        ids = {m.id for m in self.modules.values() if m.is_controller}
+        ids = {
+            m.id
+            for m in self.modules.values()
+            if m.is_controller or (m.flow_meters and not m.raw.get("typeIsPoolProduct"))
+        }
         for module_id in list(ids):
             relay = self.module_state(module_id).get("relay")
             if relay and relay in self.modules:

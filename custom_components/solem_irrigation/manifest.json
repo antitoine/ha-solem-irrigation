@@ -9,5 +9,5 @@
   "issue_tracker": "https://github.com/antitoine/ha-solem-irrigation/issues",
   "loggers": ["custom_components.solem_irrigation"],
   "requirements": [],
-  "version": "0.5.0"
+  "version": "0.6.0"
 }
