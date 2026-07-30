@@ -41,7 +41,11 @@ async def async_setup_entry(
         entities.append(SolemLastCommunicationSensor(coordinator, module))
         if module.is_controller:
             entities.append(SolemRunningStationSensor(coordinator, module))
-        if module.raw.get("battery") is not None:
+        # SOLEM reports ``battery: 0`` on mains-powered modules, where it means
+        # "no battery" rather than "empty". Its own ``isBattery`` flag is the
+        # authoritative signal, and unlike a truthiness check on the level it
+        # still yields a sensor for a battery module that really has run flat.
+        if module.raw.get("isBattery"):
             entities.append(SolemBatterySensor(coordinator, module))
         for meter in module.flow_meters:
             entities.append(SolemWaterUsedSensor(coordinator, module, meter))
@@ -114,7 +118,9 @@ class SolemBatterySensor(SolemModuleEntity, SensorEntity):
     """Battery indicator as reported by SOLEM (typically a 0-5 bar level).
 
     Deliberately not a ``battery`` device-class in ``%``: SOLEM reports a small
-    level (e.g. 5 with a battery voltage of 59), which would render as "5%".
+    level (e.g. 4 alongside a battery voltage of 53 decivolts for 4x AAA), which
+    would render as "4%". Only created for modules SOLEM flags as battery
+    powered -- see ``async_setup_entry``.
     """
 
     _attr_translation_key = "battery"

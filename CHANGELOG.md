@@ -28,8 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The *Battery* sensor is now created when a module reports a level of `0`. It was
-  gated on a truthy value, so a flat battery produced no entity at all.
+- The *Battery* sensor is now created only for modules SOLEM flags as battery
+  powered (`isBattery`), and for those it appears even when the level reads `0`.
+  Previously it was gated on a truthy level, which had two consequences: a
+  genuinely flat battery produced no entity, and (briefly, in `0.6.0b1`)
+  mains-powered modules such as an AC-powered LR-IS gained a meaningless
+  *Battery* showing `0` — SOLEM reports `0` there to mean "no battery". Any such
+  entity created by `0.6.0b1` is removed automatically on upgrade.
 
 ## [0.5.0] - 2026-05-31
 

@@ -158,10 +158,42 @@ def test_battery_none(coordinator, module):
 
 
 def test_battery_zero_is_still_reported(coordinator, module):
-    """A flat battery reads 0, which is a reading and not an absence."""
+    """On a battery module a level of 0 is a reading, not an absence."""
     module.raw["battery"] = 0
     sensor = SolemBatterySensor(coordinator, module)
     assert sensor.native_value == 0
+
+
+async def test_no_battery_sensor_for_a_mains_powered_module(coordinator, module):
+    """SOLEM reports battery 0 on AC-powered modules; that is not a reading.
+
+    Observed on an LR-IS: ``battery: 0``, ``isBattery: False``,
+    ``getPowerSourceTypeName: "AC 24V"``.
+    """
+    module.raw.update({"battery": 0, "isBattery": False})
+    coordinator.modules = {module.id: module}
+    coordinator.relevant_module_ids.return_value = {"m1"}
+    entry = MagicMock()
+    entry.runtime_data = coordinator
+    added: list = []
+
+    await async_setup_entry(MagicMock(), entry, added.extend)
+
+    assert not any(s.unique_id.endswith("_battery") for s in added)
+
+
+async def test_battery_sensor_for_a_battery_powered_module(coordinator, module):
+    """A module SOLEM flags as battery powered gets the sensor, even at 0."""
+    module.raw.update({"battery": 0, "isBattery": True})
+    coordinator.modules = {module.id: module}
+    coordinator.relevant_module_ids.return_value = {"m1"}
+    entry = MagicMock()
+    entry.runtime_data = coordinator
+    added: list = []
+
+    await async_setup_entry(MagicMock(), entry, added.extend)
+
+    assert any(s.unique_id == "m1_battery" for s in added)
 
 
 # -- flow meter ---------------------------------------------------------------
@@ -278,7 +310,7 @@ async def test_async_setup_entry(coordinator, module):
         serial="SERG",
         type="LR-MB",
         display_type="LR-MB",
-        raw={"battery": 4},
+        raw={"battery": 4, "isBattery": True},
         stations=[],
         programs=[],
     )

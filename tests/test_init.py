@@ -1,7 +1,7 @@
 """Tests for SOLEM irrigation setup, unload and legacy cleanup."""
 
 from datetime import timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
@@ -115,6 +115,7 @@ async def test_legacy_entity_cleanup(hass: HomeAssistant, entry) -> None:
         "m1_manual_run",  # old "Manual run" select
         "m1_station_s1",  # old per-station switch
         "m1_program_p1",  # old per-program button
+        "m1_battery",  # 0.6.0b1: created for a mains-powered module
     ]
     kept = [
         "m1_rain_delay",
@@ -122,10 +123,16 @@ async def test_legacy_entity_cleanup(hass: HomeAssistant, entry) -> None:
         "m1_stop",
         "m1_run_duration_s1",  # current per-station number (trailing id)
         "m1_enabled",
+        "bat1_battery",  # a genuinely battery-powered module keeps its sensor
     ]
     for unique_id in legacy + kept:
         registry.async_get_or_create("switch", DOMAIN, unique_id, config_entry=entry)
 
+    entry.runtime_data = MagicMock()
+    entry.runtime_data.modules = {
+        "m1": MagicMock(id="m1", raw={"isBattery": False}),
+        "bat1": MagicMock(id="bat1", raw={"isBattery": True}),
+    }
     _async_cleanup_legacy_entities(hass, entry)
 
     remaining = {
