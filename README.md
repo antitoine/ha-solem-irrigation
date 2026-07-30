@@ -36,6 +36,8 @@ your account:
 | **Sensor** *Watering station* | Name of the station currently watering (idle = none). |
 | **Sensor** *Last communication* | Last radio contact with the module. |
 | **Sensor** *Battery* | Battery indicator (battery-powered modules). |
+| **Sensor** *&lt;meter&gt; water used* | SOLEM's lifetime water counter, for controllers with a flow meter (débitmètre). Add it to the Home Assistant **Water** dashboard. |
+| **Sensor** *&lt;meter&gt; flow rate* | How fast water is flowing right now — non-zero outside a watering run means a leak. |
 
 ### Actions (services)
 
@@ -98,6 +100,12 @@ pool integration, not this one.)
   state** (the cloud exposes no reliable read-back); their values are restored
   across restarts. They both drive the controller's on/off, so they can show
   slightly out of sync with each other.
+- A **flow meter** is a sensor wired to the controller, not a device of its own,
+  so its entities live on the controller. *Water used* is SOLEM's own lifetime
+  counter, which means restarting Home Assistant never double-counts it. The
+  meter only records a reading while water actually flows, so *flow rate* is
+  derived from the last minutes of readings; it reads `0` when idle and can be
+  briefly unknown in the first minute of a run.
 
 ## Credits
 

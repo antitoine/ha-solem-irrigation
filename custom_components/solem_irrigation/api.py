@@ -10,8 +10,15 @@ below were reverse-engineered from the web app:
 * ``POST /users/{userId}/modules``             -> module list (JSON)
 * ``GET  /module/{id}``                        -> page embeds ``let module = {…}``
                                                   (stations = ``outputs``, ``programs``)
+                                                  and ``var inputs = […]`` (sensors)
 * ``GET  /remote/module/state?moduleId={id}``  -> live watering state (JSON)
+* ``GET  /input/getLastTickFromInput``         -> newest sensor tick (JSON)
+* ``GET  /remote/module/getComputedSensorsData`` -> windowed sensor series (JSON)
 * ``POST /module/sendManualModuleCommand``     -> manual commands (form-urlencoded)
+
+Note that ``inputs`` (the module's sensors, e.g. a flow meter) are *not* part of
+the ``let module`` object: they live in a sibling ``var inputs`` array on the
+same page, so both are parsed from a single fetch.
 """
 
 from __future__ import annotations
@@ -39,6 +46,51 @@ _LOGGER = logging.getLogger(__name__)
 _USERID_RE = re.compile(r'userId\s*=\s*["\']([a-f0-9]{24})["\']')
 # let module = { … }  (a balanced object is extracted starting from the brace)
 _MODULE_MARKER = "let module = "
+# var inputs = [ … ]  (the module's sensors; a flow meter is type 1)
+_INPUTS_MARKER = "var inputs = "
+
+# The label the user typed for a sensor is not in ``var inputs`` (whose ``name``
+# is empty); it is rendered into the settings form instead:
+#   <input … name="sensor-name" value="Flowmeter" data-input-id="abc…" />
+# Match the whole tag first, then pull the attributes out, so attribute order
+# does not matter.
+_SENSOR_NAME_TAG_RE = re.compile(r"<input[^>]*\bname=\"sensor-name\"[^>]*>")
+_VALUE_ATTR_RE = re.compile(r"\bvalue=\"([^\"]*)\"")
+_INPUT_ID_ATTR_RE = re.compile(r"\bdata-input-id=\"([a-f0-9]{24})\"")
+
+# Sensor readings are stored raw and scaled by a tiny formula the cloud ships
+# alongside them, e.g. "x/0.1" (a 10 L/pulse meter) or "x/100.0" (centi-degrees).
+_EXPRESSION_RE = re.compile(r"^x(?:\s*([*/])\s*(\d+(?:\.\d+)?))?$")
+
+
+def apply_expression(expression: str | None, value: float) -> float | None:
+    """Scale a raw sensor ``value`` with SOLEM's ``expression``.
+
+    The expression comes from the cloud, so it is matched against a strict
+    pattern rather than evaluated: ``x``, ``x*<number>`` and ``x/<number>`` are
+    the only shapes SOLEM is known to emit.
+
+    Returns None when the expression is present but unsupported (or divides by
+    zero), so callers can refuse to publish a value they cannot scale. A missing
+    or empty expression is the identity, not a failure.
+    """
+    if not expression:
+        return float(value)
+    match = _EXPRESSION_RE.match(expression.strip())
+    if match is None:
+        return None
+    operator, operand = match.groups()
+    if operator is None:
+        return float(value)
+    number = float(operand)
+    if operator == "*":
+        scaled = value * number
+    elif number == 0:
+        return None
+    else:
+        scaled = value / number
+    # Keep float artefacts (3970.0000000000005) out of the recorder.
+    return round(scaled, 3)
 
 
 class SolemError(Exception):
@@ -53,17 +105,20 @@ class SolemConnectionError(SolemError):
     """The cloud could not be reached or returned an unexpected response."""
 
 
-def _extract_js_object(html: str, marker: str) -> dict[str, Any] | None:
-    """Extract the first balanced ``{…}`` object following ``marker``.
+def _extract_js_literal(html: str, marker: str, opener: str) -> Any | None:
+    """Extract the first balanced ``opener``-delimited literal after ``marker``.
 
-    The MySOLEM pages embed plain JSON object literals (double-quoted keys and
+    The MySOLEM pages embed plain JSON literals (double-quoted keys and
     strings), so once the balanced span is isolated it parses with ``json``.
-    Brace counting ignores braces that appear inside string literals.
+    Only the chosen bracket pair is counted -- JSON nesting is balanced, so an
+    inner ``[`` inside an object (or vice versa) can never close the outer span.
+    Brackets that appear inside string literals are ignored.
     """
+    closer = {"{": "}", "[": "]"}[opener]
     start_marker = html.find(marker)
     if start_marker == -1:
         return None
-    start = html.find("{", start_marker)
+    start = html.find(opener, start_marker)
     if start == -1:
         return None
 
@@ -82,18 +137,41 @@ def _extract_js_object(html: str, marker: str) -> dict[str, Any] | None:
             continue
         if char == '"':
             in_string = True
-        elif char == "{":
+        elif char == opener:
             depth += 1
-        elif char == "}":
+        elif char == closer:
             depth -= 1
             if depth == 0:
                 blob = html[start : i + 1]
                 try:
                     return json.loads(blob)
                 except json.JSONDecodeError:
-                    _LOGGER.debug("Failed to JSON-decode embedded object")
+                    _LOGGER.debug("Failed to JSON-decode embedded literal")
                     return None
     return None
+
+
+def _extract_js_object(html: str, marker: str) -> dict[str, Any] | None:
+    """Extract the first balanced ``{…}`` object following ``marker``."""
+    value = _extract_js_literal(html, marker, "{")
+    return value if isinstance(value, dict) else None
+
+
+def _extract_js_array(html: str, marker: str) -> list[Any] | None:
+    """Extract the first balanced ``[…]`` array following ``marker``."""
+    value = _extract_js_literal(html, marker, "[")
+    return value if isinstance(value, list) else None
+
+
+def _extract_input_labels(html: str) -> dict[str, str]:
+    """Map input id -> the label the user gave that sensor in the web app."""
+    labels: dict[str, str] = {}
+    for tag in _SENSOR_NAME_TAG_RE.findall(html):
+        input_id = _INPUT_ID_ATTR_RE.search(tag)
+        value = _VALUE_ATTR_RE.search(tag)
+        if input_id and value and value.group(1).strip():
+            labels[input_id.group(1)] = value.group(1).strip()
+    return labels
 
 
 class SolemApiClient:
@@ -183,17 +261,32 @@ class SolemApiClient:
         modules = data.get("modules", []) if isinstance(data, dict) else []
         return [m["id"] for m in modules if isinstance(m, dict) and m.get("id")]
 
-    async def async_get_module(self, module_id: str) -> dict[str, Any]:
-        """Return the full module record parsed from the module page.
+    async def async_get_module_page(
+        self, module_id: str
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Return ``(module, inputs)`` parsed from a single module-page fetch.
 
-        The record is the embedded ``let module = {…}`` object and contains
-        everything we need: ``name``, ``serialNumber``, ``type``, the
+        The module record is the embedded ``let module = {…}`` object and
+        contains everything we need: ``name``, ``serialNumber``, ``type``, the
         ``typeIs*`` capability flags, ``outputs`` (stations) and ``programs``.
-        Returns an empty dict if the page could not be parsed.
+        The inputs are the module's sensors, from the sibling ``var inputs``
+        array; a flow meter is ``type`` 1. The page weighs well over a megabyte,
+        so both are taken from the same request.
+
+        Each input's empty ``name`` is filled in with the label the user gave it
+        in the web app, which is rendered elsewhere in the page. Returns
+        ``({}, [])`` if the page could not be parsed.
         """
         await self._ensure_login()
         html = await self._request_text("GET", f"/module/{module_id}")
-        return _extract_js_object(html, _MODULE_MARKER) or {}
+        module = _extract_js_object(html, _MODULE_MARKER) or {}
+        labels = _extract_input_labels(html)
+        inputs = [
+            {**record, "name": record.get("name") or labels.get(record["id"], "")}
+            for record in _extract_js_array(html, _INPUTS_MARKER) or []
+            if isinstance(record, dict) and record.get("id")
+        ]
+        return module, inputs
 
     async def async_get_module_state(self, module_id: str) -> dict[str, Any]:
         """Return the live watering state for a module."""
@@ -202,6 +295,45 @@ class SolemApiClient:
             "GET", f"/remote/module/state?moduleId={module_id}"
         )
         return data if isinstance(data, dict) else {}
+
+    async def async_get_last_input_tick(self, input_id: str) -> dict[str, Any]:
+        """Return the newest tick recorded for a sensor input.
+
+        Unlike the windowed series this always answers, however old the reading
+        is, which makes it the reliable source for a cumulative counter. The
+        ``value`` is **raw**: scale it with :func:`apply_expression` using the
+        input's ``expression``. Returns an empty dict for a sensor that has
+        never reported.
+        """
+        await self._ensure_login()
+        data = await self._request_json(
+            "GET", f"/input/getLastTickFromInput?inputId={input_id}"
+        )
+        tick = data.get("tick") if isinstance(data, dict) else None
+        return tick if isinstance(tick, dict) else {}
+
+    async def async_get_module_sensor_data(
+        self, module_id: str, start: str, end: str
+    ) -> list[dict[str, Any]]:
+        """Return each of a module's inputs with its ticks between two dates.
+
+        ``start``/``end`` are ISO-8601 strings (this module stays free of Home
+        Assistant, so the caller formats them). Values in ``computedSensorData``
+        already have the input's ``expression`` applied. Ticks only exist while
+        the sensor is actually measuring, so a quiet window legitimately returns
+        the input records with an empty series.
+        """
+        await self._ensure_login()
+        data = await self._request_json(
+            "GET",
+            f"/remote/module/getComputedSensorsData?moduleId={module_id}"
+            f"&startDate={start}&endDate={end}&forceRawOrComputed=computed",
+        )
+        return (
+            [record for record in data if isinstance(record, dict)]
+            if isinstance(data, list)
+            else []
+        )
 
     # -- writes (manual commands) ------------------------------------------
 

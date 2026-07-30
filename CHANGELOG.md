@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-30
+
+### Added
+
+- **Flow meter (débitmètre) support.** A controller with a flow meter now gets two
+  sensors per meter:
+  - ***&lt;meter&gt; water used*** — SOLEM's lifetime water counter, as a
+    `total_increasing` volume with the `water` device class, so it can be added
+    to the Home Assistant **Water** dashboard. Because the counter is SOLEM's own
+    and not accumulated locally, restarting Home Assistant never double-counts.
+  - ***&lt;meter&gt; flow rate*** — how fast water is flowing right now, in
+    L/min (or gal/min). Non-zero outside a watering run is the signal a leak
+    would produce. The meter only records while water flows, so the rate is
+    derived from its most recent readings: it reads `0` when idle and may be
+    briefly unknown in the first minute of a run.
+
+  The meter's configuration (measurement interval, thresholds, leak-alert volume,
+  each station's nominal flow) and SOLEM's own probe flags are exposed as
+  attributes of the *water used* sensor. Meters on pool modules are ignored, as
+  those modules already are.
+
+### Fixed
+
+- The *Battery* sensor is now created only for modules SOLEM flags as battery
+  powered (`isBattery`), and for those it appears even when the level reads `0`.
+  Previously it was gated on a truthy level, which had two consequences: a
+  genuinely flat battery produced no entity, and (briefly, in `0.6.0b1`)
+  mains-powered modules such as an AC-powered LR-IS gained a meaningless
+  *Battery* showing `0` — SOLEM reports `0` there to mean "no battery". Any such
+  entity created by `0.6.0b1` is removed automatically on upgrade.
+
 ## [0.5.0] - 2026-05-31
 
 Quality and maintainability release. No functional changes to the integration —
@@ -161,7 +192,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.3.0...v0.4.0

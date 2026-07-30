@@ -28,12 +28,15 @@ maintainable.
 ## 📂 Project structure & responsibilities
 
 - **`api.py`** — ALL MySOLEM cloud logic (login, module discovery, live state,
-  manual commands). Session-cookie auth, HTML-embedded JSON parsing, retry on
-  expired session. No Home Assistant imports here.
+  sensor readings, manual commands). Session-cookie auth, HTML-embedded JSON
+  parsing, retry on expired session. No Home Assistant imports here. Note the
+  module page carries *two* embedded literals: `let module = {…}` and a sibling
+  `var inputs = […]` (the module's sensors), so both come from one fetch.
 - **`coordinator.py`** — `DataUpdateCoordinator` that logs in, discovers modules
   (classifying irrigation controllers via SOLEM's `typeIsWatering` flag),
   polls live state, and owns the **optimistic update + delayed reconcile** used
-  to mask slow LoRa downlinks. Also persists the per-station run duration.
+  to mask slow LoRa downlinks. Also persists the per-station run duration and
+  polls each flow meter (its lifetime counter plus a derived flow rate).
 - **`entity.py`** — base `CoordinatorEntity` sharing `device_info` (and the
   controller → gateway `via_device` link) across platforms.
 - **Platforms** — thin wrappers over coordinator data:
@@ -44,7 +47,8 @@ maintainable.
   - `select.py` — *Run program* (momentary; resets to a neutral option).
   - `number.py` — per-station *Run duration* and assumed-state *Rain delay*.
   - `button.py` — global *Stop watering*.
-  - `sensor.py` — *Watering station*, *Last communication*, *Battery*.
+  - `sensor.py` — *Watering station*, *Last communication*, *Battery*, and per
+    flow meter *water used* (cumulative) + *flow rate*.
 - **`config_flow.py`** — setup (email / password / region) with re-auth.
 - **`const.py`** — domain, regions/base URLs, command vocabulary, service names.
 - **`tests/`** — `pytest` suite mirroring the source. Pure logic and entity

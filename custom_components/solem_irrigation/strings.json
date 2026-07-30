@@ -61,6 +61,12 @@
       },
       "battery": {
         "name": "Battery"
+      },
+      "water_used": {
+        "name": "{meter} water used"
+      },
+      "water_flow_rate": {
+        "name": "{meter} flow rate"
       }
     }
   },

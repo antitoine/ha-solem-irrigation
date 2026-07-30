@@ -71,10 +71,19 @@ def _async_cleanup_legacy_entities(
 ) -> None:
     """Remove per-station/program/stop/number entities from older versions."""
     entity_registry = er.async_get(hass)
+    # 0.6.0b1 briefly created a Battery sensor for every module, including
+    # mains-powered ones where SOLEM reports a level of 0 meaning "no battery".
+    stale_battery = {
+        f"{module.id}_battery"
+        for module in entry.runtime_data.modules.values()
+        if not module.raw.get("isBattery")
+    }
     for entity in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
         unique_id = entity.unique_id
-        if unique_id.endswith(_LEGACY_UNIQUE_ID_SUFFIXES) or any(
-            token in unique_id for token in _LEGACY_UNIQUE_ID_SUBSTRINGS
+        if (
+            unique_id.endswith(_LEGACY_UNIQUE_ID_SUFFIXES)
+            or any(token in unique_id for token in _LEGACY_UNIQUE_ID_SUBSTRINGS)
+            or unique_id in stale_battery
         ):
             entity_registry.async_remove(entity.entity_id)
 
