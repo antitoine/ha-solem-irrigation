@@ -157,6 +157,13 @@ def test_battery_none(coordinator, module):
     assert sensor.native_value is None
 
 
+def test_battery_zero_is_still_reported(coordinator, module):
+    """A flat battery reads 0, which is a reading and not an absence."""
+    module.raw["battery"] = 0
+    sensor = SolemBatterySensor(coordinator, module)
+    assert sensor.native_value == 0
+
+
 # -- flow meter ---------------------------------------------------------------
 
 

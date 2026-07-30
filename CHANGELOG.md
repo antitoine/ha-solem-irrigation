@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attributes of the *water used* sensor. Meters on pool modules are ignored, as
   those modules already are.
 
+### Fixed
+
+- The *Battery* sensor is now created when a module reports a level of `0`. It was
+  gated on a truthy value, so a flat battery produced no entity at all.
+
 ## [0.5.0] - 2026-05-31
 
 Quality and maintainability release. No functional changes to the integration —

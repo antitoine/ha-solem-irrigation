@@ -41,7 +41,7 @@ async def async_setup_entry(
         entities.append(SolemLastCommunicationSensor(coordinator, module))
         if module.is_controller:
             entities.append(SolemRunningStationSensor(coordinator, module))
-        if module.raw.get("battery"):
+        if module.raw.get("battery") is not None:
             entities.append(SolemBatterySensor(coordinator, module))
         for meter in module.flow_meters:
             entities.append(SolemWaterUsedSensor(coordinator, module, meter))
