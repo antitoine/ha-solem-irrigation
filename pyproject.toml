@@ -11,7 +11,7 @@ exclude = ["tests", "config"]
 name = "ha-solem-irrigation"
 version = "0.0.0"
 description = "Home Assistant integration for SOLEM connected irrigation controllers"
-requires-python = ">=3.13"
+requires-python = ">=3.14.2"
 authors = [{ name = "antitoine" }]
 license = { text = "MIT" }
 dependencies = []
@@ -29,13 +29,17 @@ dev = [
 dev = [
     "aiohttp>=3.9",
     "aioresponses>=0.7.8",
+    # Dev/test only: forces pytest-homeassistant-custom-component to a build that
+    # pins Home Assistant >= 2026.9, where `via_device_id` exists. The integration
+    # itself declares no requirements.
+    "homeassistant>=2026.9.0",
     "python-dotenv>=1.2.1",
     "pytest-cov",
 ]
 
 [tool.ruff]
 line-length = 88
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "PL"]

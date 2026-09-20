@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-20
+
+### Changed
+
+- **Home Assistant 2026.9 or newer is now required** (previously 2024.12). The
+  controller → gateway device link was migrated from the deprecated `via_device`
+  to `via_device_id`, which only exists from 2026.9 — Home Assistant removes
+  `via_device` in 2027.8. The link is now applied when the devices are
+  registered at setup rather than from each entity's device info, because
+  `via_device_id` takes a device-registry id. Installations on an older Home
+  Assistant simply will not be offered the update by HACS.
+
+### Fixed
+
+- A module with no serial number no longer ends up with an empty-string serial
+  on its device instead of none.
+
 ## [0.6.0] - 2026-07-30
 
 ### Added
@@ -192,7 +209,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.0...v0.4.1
