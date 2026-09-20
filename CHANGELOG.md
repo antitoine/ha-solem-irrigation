@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Home Assistant 2026.9 or newer is now required** (previously 2024.12). The
+  controller → gateway device link was migrated from the deprecated `via_device`
+  to `via_device_id`, which only exists from 2026.9 — Home Assistant removes
+  `via_device` in 2027.8. The link is now applied when the devices are
+  registered at setup rather than from each entity's device info, because
+  `via_device_id` takes a device-registry id. Installations on an older Home
+  Assistant simply will not be offered the update by HACS.
+
+### Fixed
+
+- A module with no serial number no longer ends up with an empty-string serial
+  on its device instead of none.
+
 ## [0.6.0] - 2026-07-30
 
 ### Added

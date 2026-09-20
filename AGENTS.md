@@ -37,8 +37,12 @@ maintainable.
   polls live state, and owns the **optimistic update + delayed reconcile** used
   to mask slow LoRa downlinks. Also persists the per-station run duration and
   polls each flow meter (its lifetime counter plus a derived flow rate).
-- **`entity.py`** — base `CoordinatorEntity` sharing `device_info` (and the
-  controller → gateway `via_device` link) across platforms.
+- **`__init__.py`** — entry setup / unload, legacy-entity cleanup, and the
+  device pre-registration that also links each controller to its LoRa gateway.
+  The link uses `via_device_id`, which needs a device-registry id, so it cannot
+  live in an entity's `device_info`.
+- **`entity.py`** — base `CoordinatorEntity` sharing `device_info` across
+  platforms.
 - **Platforms** — thin wrappers over coordinator data:
   - `valve.py` — one valve per station (only one is ever open: the hardware
     waters one station at a time).

@@ -35,7 +35,6 @@ def coordinator() -> MagicMock:
 def test_device_info_basic(coordinator):
     module = _module()
     coordinator.modules = {"m1": module}
-    coordinator.module_state.return_value = {}
     entity = SolemModuleEntity(coordinator, module)
 
     info = entity.device_info
@@ -43,28 +42,19 @@ def test_device_info_basic(coordinator):
     assert info["manufacturer"] == MANUFACTURER
     assert info["model"] == "LR-IS Pro"
     assert info["serial_number"] == "SER1"
+    # The gateway link lives in `async_setup_entry`, not here: `via_device_id`
+    # needs a registry id, and a bad one is a hard error in the device registry.
     assert "via_device" not in info
+    assert "via_device_id" not in info
 
 
-def test_device_info_links_to_gateway(coordinator):
-    """A controller is linked to the gateway (relay) it talks through."""
-    controller = _module("m1")
-    gateway = _module("g1", serial="SERG")
-    coordinator.modules = {"m1": controller, "g1": gateway}
-    coordinator.module_state.return_value = {"relay": "g1"}
-    entity = SolemModuleEntity(coordinator, controller)
+def test_device_info_blank_serial_is_none(coordinator):
+    """An empty serial must not overwrite the `None` written at registration."""
+    module = _module(serial="")
+    coordinator.modules = {"m1": module}
+    entity = SolemModuleEntity(coordinator, module)
 
-    assert entity.device_info["via_device"] == (DOMAIN, "g1")
-
-
-def test_device_info_ignores_unknown_relay(coordinator):
-    """A relay that isn't a known module must not create a dangling via_device."""
-    controller = _module("m1")
-    coordinator.modules = {"m1": controller}
-    coordinator.module_state.return_value = {"relay": "g1"}
-    entity = SolemModuleEntity(coordinator, controller)
-
-    assert "via_device" not in entity.device_info
+    assert entity.device_info["serial_number"] is None
 
 
 def test_available_tracks_module_presence(coordinator):

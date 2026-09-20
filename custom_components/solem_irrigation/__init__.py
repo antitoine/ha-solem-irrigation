@@ -47,20 +47,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: SolemConfigEntry) -> boo
     _async_cleanup_legacy_entities(hass, entry)
 
     # Pre-register the devices (controllers and their gateway) before the
-    # platforms add entities, so child `via_device` links always resolve
-    # regardless of platform setup order.
+    # platforms add entities, then link each controller to its gateway.
+    # `via_device_id` takes a device-registry id, which only exists once the
+    # parent has been created -- and an id that is unknown, or that points at
+    # the device itself, is a hard registry error, so it must never reach an
+    # entity's `DeviceInfo`. Hence both passes live here rather than in
+    # `entity.py`; omitting the key in `DeviceInfo` never clears the link.
     device_registry = dr.async_get(hass)
+    device_ids: dict[str, str] = {}
+    relevant = coordinator.relevant_module_ids()
     for module in coordinator.modules.values():
-        if module.id not in coordinator.relevant_module_ids():
+        if module.id not in relevant:
             continue
-        device_registry.async_get_or_create(
+        device_ids[module.id] = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, module.id)},
             manufacturer=MANUFACTURER,
             name=module.name,
             model=module.display_type or module.type,
             serial_number=module.serial or None,
-        )
+        ).id
+
+    # Link a controller to the gateway (relay) it talks through, when known. A
+    # relay that is not a module of ours, or that is the module itself, is left
+    # unlinked rather than passed on: the registry rejects both.
+    for module_id, device_id in device_ids.items():
+        relay = coordinator.module_state(module_id).get("relay")
+        if relay and relay != module_id and (via_id := device_ids.get(relay)):
+            device_registry.async_update_device(device_id, via_device_id=via_id)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

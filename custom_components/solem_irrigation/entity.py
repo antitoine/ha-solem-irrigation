@@ -28,20 +28,20 @@ class SolemModuleEntity(CoordinatorEntity[SolemDataUpdateCoordinator]):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device info, linking controllers to their LoRa gateway."""
+        """Return device info for this module's device.
+
+        The controller -> gateway link is deliberately absent: `via_device_id`
+        needs a device-registry id, so it is applied in ``__init__.py`` when the
+        devices are pre-registered. Omitting the key never clears the link.
+        """
         module = self._module
-        info = DeviceInfo(
+        return DeviceInfo(
             identifiers={(DOMAIN, module.id)},
             name=module.name,
             manufacturer=MANUFACTURER,
             model=module.display_type or module.type,
-            serial_number=module.serial,
+            serial_number=module.serial or None,
         )
-        # Link a controller to the gateway (relay) it talks through, when known.
-        relay = self.coordinator.module_state(module.id).get("relay")
-        if relay and relay != module.id and relay in self.coordinator.modules:
-            info["via_device"] = (DOMAIN, relay)
-        return info
 
     @property
     def available(self) -> bool:
