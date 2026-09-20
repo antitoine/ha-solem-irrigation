@@ -2,7 +2,9 @@
 
 import pathlib
 
+import aioresponses.core
 import pytest
+from aiohttp import ClientResponse
 
 # When the integration is installed in editable mode, Home Assistant's
 # integration discovery walks a synthetic ``__editable__`` finder path that does
@@ -20,6 +22,29 @@ def _safe_iterdir(self):
 
 
 pathlib.Path.iterdir = _safe_iterdir
+
+
+# aioresponses 0.7.9 (its latest release) builds its fake `ClientResponse` with
+# `writer=None`, and aiohttp 3.14 made `stream_writer` a required keyword-only
+# argument that is then dereferenced on exactly that path. Give it a stub so the
+# API tests keep working; drop this once aioresponses ships aiohttp 3.14 support.
+# See https://github.com/pnuckowski/aioresponses/issues
+class _StubStreamWriter:
+    """Minimal stand-in for the writer aioresponses never has."""
+
+    output_size = 0
+
+
+class _MockedClientResponse(ClientResponse):
+    """`ClientResponse` that tolerates aioresponses' argument set."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("stream_writer", _StubStreamWriter())
+        super().__init__(*args, **kwargs)
+
+
+aioresponses.core.ClientResponse = _MockedClientResponse
+
 
 try:
     from pytest_socket import enable_socket, socket_allow_hosts

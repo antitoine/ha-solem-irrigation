@@ -20,17 +20,17 @@ opening a pull request.
 
 ## 🛠️ Technology stack & environment
 
-- **Language**: Python 3.13+ (type hints expected)
+- **Language**: Python 3.14.2+ (type hints expected)
 - **Dependency management**: [uv](https://docs.astral.sh/uv/)
 - **Lint & format**: [ruff](https://docs.astral.sh/ruff/)
 - **Testing**: [pytest](https://docs.pytest.org/) with
   [`pytest-homeassistant-custom-component`](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component)
 - **Manual testing**: Docker / Docker Compose
 
-> **Why Python 3.13?** Recent Home Assistant releases (which the test
-> dependencies pull in) require Python 3.13. The integration itself runs on
+> **Why Python 3.14.2?** Recent Home Assistant releases (which the test
+> dependencies pull in) require Python 3.14.2. The integration itself runs on
 > whatever Python your Home Assistant uses; this only affects the dev/test env.
-> A `.python-version` file pins it for `uv`.
+> A `.python-version` file pins the exact patch for `uv`, and CI reads it.
 
 ### Getting started
 

@@ -59,6 +59,13 @@ CONTROLLER = {
     "programs": [{"id": "p1", "name": "Matin", "index": 1}],
 }
 
+GATEWAY = {
+    "name": "Gateway",
+    "serialNumber": "SERG",
+    "type": "LR-MB",
+    "typeIsWatering": False,
+}
+
 
 @pytest.fixture
 def entry(hass: HomeAssistant) -> MockConfigEntry:
@@ -86,7 +93,10 @@ async def test_setup_and_unload_entry(hass: HomeAssistant, entry) -> None:
     assert isinstance(entry.runtime_data, SolemDataUpdateCoordinator)
     # The controller's device was pre-registered.
     device_registry = dr.async_get(hass)
-    assert device_registry.async_get_device(identifiers={(DOMAIN, "m1")}) is not None
+    assert (
+        device_registry.async_get_device_by_identifier((DOMAIN, "m1"), entry.entry_id)
+        is not None
+    )
 
     with patch(
         "homeassistant.config_entries.ConfigEntries.async_unload_platforms",
@@ -203,3 +213,57 @@ async def test_flow_meter_entities_are_accepted_by_home_assistant(
     assert rate.attributes["device_class"] == "volume_flow_rate"
     assert rate.attributes["state_class"] == "measurement"
     assert rate.attributes["unit_of_measurement"] == "L/min"
+
+
+async def test_controller_is_linked_to_its_gateway(hass: HomeAssistant, entry) -> None:
+    """The controller's device points at the gateway's device id.
+
+    Drives the real platforms, so the link is asserted after every platform has
+    re-registered the device from its own ``device_info`` -- which must not
+    clear it.
+    """
+    pages = {"m1": (CONTROLLER, []), "g1": (GATEWAY, [])}
+    states = {"m1": {"relay": "g1"}, "g1": {}}
+
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["m1", "g1"])),
+        patch(_GET, AsyncMock(side_effect=lambda module_id: pages[module_id])),
+        patch(_STATE, AsyncMock(side_effect=lambda module_id: states[module_id])),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    registry = dr.async_get(hass)
+    controller = registry.async_get_device_by_identifier((DOMAIN, "m1"), entry.entry_id)
+    gateway = registry.async_get_device_by_identifier((DOMAIN, "g1"), entry.entry_id)
+    assert controller is not None and gateway is not None
+    assert controller.via_device_id == gateway.id
+    # The gateway is nobody's child. A self-reference would raise out of the
+    # device registry and fail platform setup outright.
+    assert gateway.via_device_id is None
+
+
+@pytest.mark.parametrize("relay", ["m1", "unknown"])
+async def test_unlinkable_relay_leaves_no_via_device(
+    hass: HomeAssistant, entry, relay: str
+) -> None:
+    """A relay that is the module itself, or one we never discovered, is skipped."""
+    entry.mock_state(hass, ConfigEntryState.SETUP_IN_PROGRESS)
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["m1"])),
+        patch(_GET, AsyncMock(return_value=(CONTROLLER, []))),
+        patch(_STATE, AsyncMock(return_value={"relay": relay})),
+        patch(
+            "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
+            new_callable=AsyncMock,
+        ),
+    ):
+        assert await async_setup_entry(hass, entry) is True
+
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "m1"), entry.entry_id
+    )
+    assert device is not None
+    assert device.via_device_id is None

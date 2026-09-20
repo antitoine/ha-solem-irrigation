@@ -514,7 +514,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         watering = self.module_state(module_id).get("status", {}).get("watering", {})
         try:
             return int(watering.get("runningStation", 0) or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 0
 
     def apply_optimistic_running_station(self, module_id: str, index: int) -> None:
