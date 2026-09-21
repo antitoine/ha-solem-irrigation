@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Diagnostics.** The integration page now offers **⋮ → Download diagnostics**,
+  which dumps, for every module on the account (including those the integration
+  ignores): the raw module record, **every** sensor input — not only the flow
+  meters that currently become entities — and the live state. Credentials,
+  serial numbers and location are redacted.
+
+  SOLEM's API is private and undocumented and returns different fields for
+  different hardware, so this is what makes a report about hardware the
+  maintainer does not own actionable. The bug-report and feature-request
+  templates now ask for it.
+
+### Fixed
+
+- ***Last communication* no longer stays `unknown` on modules without a LoRa
+  radio.** It only ever read `lastRadioCommunication`, which is the gateway ↔
+  controller radio contact and therefore absent on anything that reaches the
+  cloud directly — the LR-MB gateway itself, and WiFi controllers such as the
+  SMART-IS. It now falls back to the module's own `seenAt` timestamp.
+  ([#7](https://github.com/antitoine/ha-solem-irrigation/issues/7))
+
+### Changed
+
+- The discovery debug log now reports each module's input count and input
+  types, so a sensor the integration does not model yet is visible from the log
+  alone.
+- README: documented that discovery is transport-agnostic — WiFi modules
+  (SMART-IS) work exactly like LoRa ones, which was not stated anywhere.
+  ([#7](https://github.com/antitoine/ha-solem-irrigation/issues/7))
+
 ## [0.7.0] - 2026-09-20
 
 ### Changed

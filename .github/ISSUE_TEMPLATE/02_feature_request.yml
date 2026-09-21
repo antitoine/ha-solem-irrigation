@@ -26,3 +26,18 @@ body:
     attributes:
       label: Describe alternatives you've considered
       description: A clear and concise description of any alternative solutions or features you've considered.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics (optional, but it decides whether this is possible)
+      description: |
+        If your request is about hardware or a sensor the integration doesn't
+        expose yet, attach a diagnostics file — it tells me whether MySOLEM
+        actually reports what you're asking for, which I usually cannot find
+        out on my own.
+
+        **Settings → Devices & Services → SOLEM Irrigation → ⋮ → Download
+        diagnostics**, then drag the file into this box.
+
+        Credentials, serial numbers and your location are redacted
+        automatically.

@@ -213,6 +213,12 @@ class SolemModule:
     stations: list[SolemStation] = field(default_factory=list)
     programs: list[SolemProgram] = field(default_factory=list)
     flow_meters: list[SolemFlowMeter] = field(default_factory=list)
+    # Every input as the cloud returned it, including the ones
+    # ``_build_flow_meters`` drops. Nothing reads this at runtime; it exists so
+    # diagnostics can show a sensor the integration does not model yet (a rain
+    # gauge, a soil-moisture probe), which is otherwise invisible -- ``raw`` is
+    # the ``let module`` object and does not carry the inputs.
+    raw_inputs: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def is_controller(self) -> bool:
@@ -372,16 +378,29 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                         if p.get("id")
                     ],
                     flow_meters=_build_flow_meters(inputs),
+                    raw_inputs=inputs,
                 )
                 modules[module_id] = module
+                # ``input_types`` is what makes a sensor this integration does
+                # not model yet (a rain gauge, a soil probe) visible to a user
+                # who can only send a log line rather than a diagnostics file.
                 _LOGGER.debug(
                     "Discovered module %s: name=%s type=%s outputs=%d "
-                    "programs=%d flow_meters=%d controller=%s",
+                    "programs=%d inputs=%d input_types=%s flow_meters=%d "
+                    "controller=%s",
                     module_id,
                     module.name,
                     module.type,
                     len(module.stations),
                     len(module.programs),
+                    len(module.raw_inputs),
+                    sorted(
+                        {
+                            record.get("type")
+                            for record in module.raw_inputs
+                            if record.get("type") is not None
+                        }
+                    ),
                     len(module.flow_meters),
                     module.is_controller,
                 )

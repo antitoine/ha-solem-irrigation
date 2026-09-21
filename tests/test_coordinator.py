@@ -223,6 +223,37 @@ async def test_setup_discovers_and_classifies_modules(coordinator):
     assert coordinator.modules["g1"].is_controller is False
 
 
+async def test_setup_keeps_every_input_not_just_flow_meters(coordinator):
+    """``raw_inputs`` keeps the sensors the integration does not model yet.
+
+    A rain gauge or a soil probe is an input of some other type, which
+    ``_build_flow_meters`` drops -- and ``raw`` (the ``let module`` object) does
+    not carry the inputs at all. Without this, such a sensor is invisible even
+    in diagnostics, which is what issue #8 is blocked on.
+    """
+    moisture = {"id": "i2", "type": 4, "index": 2, "getName": "Sonde d'humidité"}
+    coordinator.client.async_login = AsyncMock(return_value="uid")
+    coordinator.client.async_get_module_ids = AsyncMock(return_value=["m1"])
+    coordinator.client.async_get_module_page = AsyncMock(
+        return_value=(
+            {
+                "name": "Ctrl",
+                "type": "LR-IS",
+                "typeIsWatering": True,
+                "outputs": [{"id": "o1", "name": "Z1", "index": 1}],
+            },
+            [dict(FLOW_INPUT), moisture],
+        )
+    )
+
+    await coordinator.async_setup()
+
+    module = coordinator.modules["m1"]
+    assert [m.id for m in module.flow_meters] == ["i1"]
+    assert module.raw_inputs == [dict(FLOW_INPUT), moisture]
+    assert "i2" not in str(module.raw)
+
+
 async def test_setup_skips_module_that_errors(coordinator):
     coordinator.client.async_login = AsyncMock(return_value="uid")
     coordinator.client.async_get_module_ids = AsyncMock(return_value=["m1", "boom"])
