@@ -37,8 +37,9 @@ def test_manifest_is_well_formed():
     assert manifest["config_flow"] is True
     assert manifest["integration_type"] == "hub"
     assert manifest["iot_class"] == "cloud_polling"
-    # Version is semver-shaped (survives future bumps; not hardcoded here).
-    assert re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"])
+    # Version is semver-shaped, optionally with a pre-release suffix -- betas
+    # ship as e.g. 0.8.0b1 (survives future bumps; not hardcoded here).
+    assert re.fullmatch(r"\d+\.\d+\.\d+(?:(?:[ab]|rc)\d+)?", manifest["version"])
     assert manifest["documentation"].startswith("https://")
     assert manifest["issue_tracker"].startswith("https://")
     assert manifest["codeowners"]

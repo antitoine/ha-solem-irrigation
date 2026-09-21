@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0b1] - 2026-09-21
+
+First beta of 0.8.0. It is aimed at the people who reported
+[#7](https://github.com/antitoine/ha-solem-irrigation/issues/7) and
+[#8](https://github.com/antitoine/ha-solem-irrigation/issues/8): the fix below
+is verified against an LR-MB-10 gateway but *not* against WiFi hardware, and
+the new diagnostics dump is what makes the remaining reports actionable. To
+install it, enable **Show beta versions** in HACS.
+
 ### Added
 
 - **Diagnostics.** The integration page now offers **⋮ → Download diagnostics**,
@@ -244,7 +253,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0b1...HEAD
+[0.8.0b1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...v0.8.0b1
 [0.7.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.1...v0.5.0
