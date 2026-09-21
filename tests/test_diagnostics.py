@@ -146,6 +146,29 @@ async def test_diagnostics_drops_noisy_blobs(hass, entry):
     assert result["modules"]["m1"]["raw"]["sensorState"] is False
 
 
+async def test_diagnostics_survives_a_coordinator_with_no_data(hass, entry, module):
+    """A dump must work on exactly the install that needs one.
+
+    ``relevant_module_ids`` is a real method that walks every module's state,
+    and ``data`` is None until a refresh succeeds -- which is precisely the
+    situation someone downloads diagnostics in.
+    """
+    coordinator = entry.runtime_data
+    coordinator.data = None
+    coordinator.relevant_module_ids = lambda: (
+        SolemDataUpdateCoordinator.relevant_module_ids(coordinator)
+    )
+    coordinator.module_state = lambda mid: SolemDataUpdateCoordinator.module_state(
+        coordinator, mid
+    )
+
+    result = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert result["modules"]["m1"]["state"] == {}
+    assert result["modules"]["m1"]["is_relevant"] is True  # a controller
+    assert result["coordinator"]["relevant_module_ids"] == ["m1"]
+
+
 async def test_diagnostics_includes_state_and_flow(hass, entry):
     result = await async_get_config_entry_diagnostics(hass, entry)
 

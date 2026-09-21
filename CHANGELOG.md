@@ -25,8 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ***Last communication* no longer stays `unknown` on modules without a LoRa
   radio.** It only ever read `lastRadioCommunication`, which is the gateway ↔
   controller radio contact and therefore absent on anything that reaches the
-  cloud directly — the LR-MB gateway itself, and WiFi controllers such as the
-  SMART-IS. It now falls back to the module's own `seenAt` timestamp.
+  cloud directly. It now falls back to the module's own `seenAt` timestamp.
+
+  This affected two cases: WiFi controllers such as the SMART-IS (as reported),
+  and — found while investigating — **the LR-MB gateway itself**, whose sensor
+  had been permanently `unknown` on every installation since it first got a
+  device. LoRa controllers are unchanged.
   ([#7](https://github.com/antitoine/ha-solem-irrigation/issues/7))
 
 ### Changed

@@ -58,18 +58,23 @@ TO_REDACT = {
 }
 
 # Keys dropped rather than redacted: large, third-party, and of no diagnostic
-# value. ``weatherForecast`` alone is a multi-day AccuWeather payload that would
-# bury the fields anyone is actually reading this file for.
-TO_DROP = ("weatherForecast", "lastSentProgramsSnapshot")
+# value. ``weatherForecast`` is a multi-day AccuWeather payload (MySOLEM uses it
+# for its automatic water budget) that would bury what anyone opens this file
+# for. Deliberately *not* dropped: ``lastSentProgramsSnapshot``, which is bulky
+# but carries the per-model program structure -- the one place another
+# controller's programs can be compared against ours.
+TO_DROP = ("weatherForecast",)
 
 
-def _module_diagnostics(coordinator: Any, module: Any) -> dict[str, Any]:
+def _module_diagnostics(
+    coordinator: Any, module: Any, relevant: set[str]
+) -> dict[str, Any]:
     """Return everything known about one module."""
     return {
         "type": module.type,
         "display_type": module.display_type,
         "is_controller": module.is_controller,
-        "is_relevant": module.id in coordinator.relevant_module_ids(),
+        "is_relevant": module.id in relevant,
         "stations": [{"name": s.name, "index": s.index} for s in module.stations],
         "programs": [{"name": p.name, "index": p.index} for p in module.programs],
         "flow_meters": [
@@ -96,6 +101,9 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
     coordinator = entry.runtime_data
+    # Computed once: it walks every module's state, and the result is shared by
+    # the summary below and by each module's ``is_relevant``.
+    relevant = coordinator.relevant_module_ids()
     data = {
         "entry": {
             "region": entry.data.get("region"),
@@ -104,7 +112,7 @@ async def async_get_config_entry_diagnostics(
         "coordinator": {
             "last_update_success": coordinator.last_update_success,
             "module_count": len(coordinator.modules),
-            "relevant_module_ids": sorted(coordinator.relevant_module_ids()),
+            "relevant_module_ids": sorted(relevant),
             "run_minutes": coordinator.run_minutes,
         },
         "flow_readings": {
@@ -117,7 +125,7 @@ async def async_get_config_entry_diagnostics(
             for meter_id, reading in coordinator.flow.items()
         },
         "modules": {
-            module_id: _module_diagnostics(coordinator, module)
+            module_id: _module_diagnostics(coordinator, module, relevant)
             for module_id, module in coordinator.modules.items()
         },
     }
