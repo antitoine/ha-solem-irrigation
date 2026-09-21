@@ -15,7 +15,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import INPUT_UNIT_GALLON
+from .const import INPUT_UNIT_GALLON, LAST_COMMUNICATION_KEYS
 from .coordinator import (
     SolemConfigEntry,
     SolemDataUpdateCoordinator,
@@ -92,7 +92,13 @@ class SolemRunningStationSensor(SolemModuleEntity, SensorEntity):
 
 
 class SolemLastCommunicationSensor(SolemModuleEntity, SensorEntity):
-    """Timestamp of the last radio communication with the module."""
+    """Timestamp of the module's last contact with the MySOLEM cloud.
+
+    Which key carries it depends on how the module reaches the cloud, so the
+    candidates in ``LAST_COMMUNICATION_KEYS`` are tried in order. Reading only
+    ``lastRadioCommunication`` left every non-LoRa module -- the LR-MB gateway,
+    and WiFi controllers such as the SMART-IS -- permanently ``unknown``.
+    """
 
     _attr_translation_key = "last_communication"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
@@ -107,11 +113,17 @@ class SolemLastCommunicationSensor(SolemModuleEntity, SensorEntity):
 
     @property
     def native_value(self) -> datetime | None:
-        """Return the last radio communication time."""
-        raw = self.coordinator.module_state(self._module_id).get(
-            "lastRadioCommunication"
-        ) or self._module.raw.get("lastRadioCommunication")
-        return dt_util.parse_datetime(raw) if raw else None
+        """Return the module's last contact time, whichever key reports it.
+
+        The live state wins over the module page for a given key: both carry
+        ``lastRadioCommunication``, and the polled one is the fresher.
+        """
+        state = self.coordinator.module_state(self._module_id)
+        raw = self._module.raw
+        for key in LAST_COMMUNICATION_KEYS:
+            if value := (state.get(key) or raw.get(key)):
+                return dt_util.parse_datetime(value)
+        return None
 
 
 class SolemBatterySensor(SolemModuleEntity, SensorEntity):

@@ -143,6 +143,29 @@ def test_last_communication_none(coordinator, module):
     assert sensor.native_value is None
 
 
+def test_last_communication_falls_back_to_seen_at(coordinator, module):
+    """A module with no LoRa radio reports ``seenAt`` instead (issue #7).
+
+    The LR-MB gateway and WiFi controllers (SMART-IS) talk to the cloud
+    directly and never emit ``lastRadioCommunication``, which used to leave
+    their sensor permanently unknown.
+    """
+    coordinator.module_state.return_value = {}
+    module.raw["seenAt"] = "2026-09-21T06:00:15.405Z"
+    sensor = SolemLastCommunicationSensor(coordinator, module)
+    assert sensor.native_value == dt_util.parse_datetime("2026-09-21T06:00:15.405Z")
+
+
+def test_last_communication_prefers_radio_over_seen_at(coordinator, module):
+    """A LoRa module keeps the radio timestamp even if ``seenAt`` is present."""
+    coordinator.module_state.return_value = {
+        "lastRadioCommunication": "2026-05-31T10:00:00+00:00"
+    }
+    module.raw["seenAt"] = "2026-09-21T06:00:15.405Z"
+    sensor = SolemLastCommunicationSensor(coordinator, module)
+    assert sensor.native_value == dt_util.parse_datetime("2026-05-31T10:00:00+00:00")
+
+
 # -- battery ------------------------------------------------------------------
 
 

@@ -76,6 +76,21 @@ INPUT_TYPE_FLOW_METER = 1
 INPUT_UNIT_LITRE = 1
 INPUT_UNIT_GALLON = 3
 
+# "Last communication" ---------------------------------------------------------
+# SOLEM reports a module's last contact under a different key depending on how
+# that module reaches the cloud, and a module only ever carries one of them:
+#
+#   lastRadioCommunication  the LoRa gateway <-> controller radio contact. Only
+#                           on LoRa children (lr-is, lr-ip, lr-mas...).
+#   seenAt                  the module's own contact with the cloud. On modules
+#                           that talk to it directly -- the LR-MB gateway, and
+#                           (unverified, no hardware to check) WiFi controllers
+#                           such as the SMART-IS, which have no LoRa radio and
+#                           therefore never report `lastRadioCommunication`.
+#
+# Tried in order, so a LoRa module keeps the radio timestamp it has always had.
+LAST_COMMUNICATION_KEYS = ("lastRadioCommunication", "seenAt")
+
 # Minutes between ticks when an input does not declare its own ``interval``.
 DEFAULT_INPUT_INTERVAL = 1
 
