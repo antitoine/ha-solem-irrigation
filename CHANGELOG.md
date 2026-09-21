@@ -64,6 +64,12 @@ install it, enable **Show beta versions** in HACS.
   device. LoRa controllers are unchanged.
   ([#7](https://github.com/antitoine/ha-solem-irrigation/issues/7))
 
+  ⚠️ **Partial for the gateway.** `seenAt` only exists on the module page,
+  which is read once at setup, so the gateway's value is a snapshot that
+  advances only when the integration reloads — it does not tick every 5
+  minutes the way a LoRa controller's does. Better than never having a value,
+  but not live; refreshing it properly is tracked separately.
+
 ### Changed
 
 - The discovery debug log now reports each module's input count and input

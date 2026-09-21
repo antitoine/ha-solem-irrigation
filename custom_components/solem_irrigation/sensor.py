@@ -117,6 +117,16 @@ class SolemLastCommunicationSensor(SolemModuleEntity, SensorEntity):
 
         The live state wins over the module page for a given key: both carry
         ``lastRadioCommunication``, and the polled one is the fresher.
+
+        Known limitation: ``self._module.raw`` is a **setup-time snapshot**.
+        ``async_get_module_page`` runs only in the coordinator's
+        ``async_setup``, so a module that reports its timestamp *only* there --
+        the LR-MB gateway, whose ``/remote/module/state`` answers 503, and
+        possibly WiFi controllers -- shows the value captured at the last
+        reload and does not advance until the next one. Still better than the
+        permanent ``unknown`` this replaced, but not live. Refreshing it means
+        re-fetching a >1 MB page per module per poll, so it needs its own
+        design rather than a wider fallback here.
         """
         state = self.coordinator.module_state(self._module_id)
         raw = self._module.raw
