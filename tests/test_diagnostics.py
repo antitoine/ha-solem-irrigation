@@ -5,6 +5,8 @@ worth guarding are opposites: nothing sensitive may survive, and everything
 *un*modelled must.
 """
 
+import json
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -52,6 +54,14 @@ def module() -> SolemModule:
             "serialNumber": "1000000000000001",
             "moduleSerialNumber": "1000000000000001",
             "addressWeather": {"cityName": "Jacou", "departementName": "Hérault"},
+            "locationKey": "149274",
+            "macAddress": "C8:B9:61:F2:F4:C5",
+            "uuid": "260058B961F2F4C50000000100F2F4C5",
+            "defaultName": "LRIS4-F2F4C5",
+            "lastSentProgramsSnapshot": {
+                "programs": [{"name": "Weekly", "startTimes": [390, -1]}],
+                "snapshotBy": "6834bf01941c491839e05734",
+            },
             "weatherForecast": {"0": {"Day": {"Rain": {"Value": 0}}}},
             "sensorState": False,
             "seenAt": "2026-09-21T06:00:15.405Z",
@@ -113,6 +123,49 @@ async def test_diagnostics_redacts_credentials_and_identity(hass, entry):
     assert raw["addressWeather"] == REDACTED
     assert "1000000000000001" not in str(result)
     assert "Jacou" not in str(result)
+
+
+@pytest.mark.parametrize(
+    ("key", "why"),
+    [
+        ("uuid", "rebuilds both the MAC and the serial"),
+        ("defaultName", "factory name, ends in the MAC tail"),
+        ("macAddress", "the MAC itself"),
+        ("locationKey", "AccuWeather id, resolves to the town"),
+    ],
+)
+async def test_diagnostics_redacts_the_identity_backdoors(hass, entry, key, why):
+    """Redacting `serialNumber` is pointless if a sibling key gives it back.
+
+    Each of these was present, unredacted, in the first diagnostics file taken
+    from a real installation, alongside an already-redacted `serialNumber`,
+    `macAddress` and `addressWeather`.
+    """
+    result = await async_get_config_entry_diagnostics(hass, entry)
+    assert result["modules"]["m1"]["raw"][key] == REDACTED, why
+
+
+async def test_diagnostics_redacts_the_user_id_inside_a_snapshot(hass, entry):
+    """`snapshotBy` is the account's user id under another name."""
+    result = await async_get_config_entry_diagnostics(hass, entry)
+    snapshot = result["modules"]["m1"]["raw"]["lastSentProgramsSnapshot"]
+
+    assert snapshot["snapshotBy"] == REDACTED
+    # ...while the payload it wraps, which is why the key is kept at all, stays.
+    assert snapshot["programs"][0]["startTimes"] == [390, -1]
+
+
+async def test_diagnostics_leaks_no_mac_or_uuid_shaped_value_anywhere(hass, entry):
+    """A structural net, so a new SOLEM key cannot reopen the same hole.
+
+    The leaks above were found by eye in a real dump, not by the suite: each
+    one carried the *same* identity as a key already redacted, in a different
+    encoding, so a literal search for the secret found nothing.
+    """
+    blob = json.dumps(await async_get_config_entry_diagnostics(hass, entry))
+    offenders = re.findall(r'"([^"]*(?:[0-9A-F]{2}:){5}[0-9A-F]{2}[^"]*)"', blob)
+    offenders += re.findall(r'"([0-9A-F]{32})"', blob)
+    assert not offenders
 
 
 async def test_diagnostics_keeps_region_and_names(hass, entry):

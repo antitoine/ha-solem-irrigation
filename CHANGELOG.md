@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0b2] - 2026-09-21
+
+### Fixed
+
+- **Diagnostics: four keys leaked identity that neighbouring keys had already
+  redacted.** Found by reading the first dump taken from a real installation —
+  the beta's whole purpose. Each carried the *same* secret as a key that *was*
+  redacted, in a different encoding, so nothing looked wrong:
+
+  | Key | Gave back |
+  | --- | --- |
+  | `uuid` | the MAC with separators stripped, plus the serial's significant half — so both `macAddress` and `serialNumber` were recoverable |
+  | `snapshotBy` | the account's user id, i.e. exactly what `userId` protects |
+  | `locationKey` | an AccuWeather location id that resolves to the town `addressWeather`, `latitude` and `longitude` hide |
+  | `defaultName` | the factory module name, which ends in the MAC tail |
+
+  All four are now redacted, and a test walks the whole payload rejecting any
+  MAC- or UUID-shaped value, so a future SOLEM key cannot reopen the same hole.
+
+  **If you downloaded a diagnostics file on `0.8.0b1`, do not post it** — take a
+  fresh one on `0.8.0b2`.
+
 ## [0.8.0b1] - 2026-09-21
 
 First beta of 0.8.0. It is aimed at the people who reported
@@ -253,7 +275,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0b1...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0b2...HEAD
+[0.8.0b2]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0b1...v0.8.0b2
 [0.8.0b1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...v0.8.0b1
 [0.7.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.5.0...v0.6.0

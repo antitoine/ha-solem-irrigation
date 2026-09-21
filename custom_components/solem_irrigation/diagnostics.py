@@ -38,24 +38,40 @@ TO_REDACT = {
     "owner",
     "token",
     "apiKey",
-    # Hardware identity
+    # The user id again, under the name it takes inside a program snapshot.
+    "snapshotBy",
+    # Hardware identity. ``uuid`` matters as much as the two obvious ones: it is
+    # built from the MAC with the separators stripped and repeats the serial's
+    # significant half (MAC C8:B9:61:0D:C2:66 / serial 1000000DC2660001 ->
+    # uuid 100058B9610DC26600000001000DC266), so leaving it in hands back both
+    # of the values redacted just above. ``defaultName`` is the factory name and
+    # ends in the MAC tail; the user-set ``name`` is deliberately kept.
     "serial",
     "serialNumber",
     "moduleSerialNumber",
     "mac",
     "macAddress",
+    "uuid",
+    "defaultName",
     "imei",
     "iccid",
     "deviceId",
     # Location. ``addressWeather`` carries the user's town and department, which
     # has no business in a file people paste into a public issue.
+    # ``locationKey`` is an AccuWeather location id, which resolves straight
+    # back to the town that ``addressWeather`` and the coordinates hide.
     "address",
     "addressWeather",
+    "locationKey",
     "latitude",
     "longitude",
     "gpsCoordinates",
     "ssid",
 }
+
+# Module, program, input and relay ids stay: they are account-internal handles
+# with no meaning outside it, and without them a dump cannot be cross-read
+# (which input belongs to which module, which gateway a controller sits behind).
 
 # Keys dropped rather than redacted: large, third-party, and of no diagnostic
 # value. ``weatherForecast`` is a multi-day AccuWeather payload (MySOLEM uses it
