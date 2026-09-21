@@ -7,36 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.8.0b2] - 2026-09-21
+## [0.8.0b3] - 2026-09-21
 
-### Fixed
+Third beta of 0.8.0. Everything below is what 0.8.0 will contain, so this
+section is written for someone coming from `0.7.0`.
 
-- **Diagnostics: four keys leaked identity that neighbouring keys had already
-  redacted.** Found by reading the first dump taken from a real installation —
-  the beta's whole purpose. Each carried the *same* secret as a key that *was*
-  redacted, in a different encoding, so nothing looked wrong:
-
-  | Key | Gave back |
-  | --- | --- |
-  | `uuid` | the MAC with separators stripped, plus the serial's significant half — so both `macAddress` and `serialNumber` were recoverable |
-  | `snapshotBy` | the account's user id, i.e. exactly what `userId` protects |
-  | `locationKey` | an AccuWeather location id that resolves to the town `addressWeather`, `latitude` and `longitude` hide |
-  | `defaultName` | the factory module name, which ends in the MAC tail |
-
-  All four are now redacted, and a test walks the whole payload rejecting any
-  MAC- or UUID-shaped value, so a future SOLEM key cannot reopen the same hole.
-
-  **If you downloaded a diagnostics file on `0.8.0b1`, do not post it** — take a
-  fresh one on `0.8.0b2`.
-
-## [0.8.0b1] - 2026-09-21
-
-First beta of 0.8.0. It is aimed at the people who reported
-[#7](https://github.com/antitoine/ha-solem-irrigation/issues/7) and
-[#8](https://github.com/antitoine/ha-solem-irrigation/issues/8): the fix below
-is verified against an LR-MB-10 gateway but *not* against WiFi hardware, and
-the new diagnostics dump is what makes the remaining reports actionable. To
-install it, enable **Show beta versions** in HACS.
+**New since `0.8.0b2`:** the *Battery* level and the gateway's *Last
+communication* now actually update — see the second entry under *Fixed*. That
+also retires the "partial for the gateway" caveat `0.8.0b2` shipped with.
 
 ### Added
 
@@ -44,7 +22,7 @@ install it, enable **Show beta versions** in HACS.
   which dumps, for every module on the account (including those the integration
   ignores): the raw module record, **every** sensor input — not only the flow
   meters that currently become entities — and the live state. Credentials,
-  serial numbers and location are redacted.
+  serial numbers, hardware identifiers and location are redacted.
 
   SOLEM's API is private and undocumented and returns different fields for
   different hardware, so this is what makes a report about hardware the
@@ -56,7 +34,7 @@ install it, enable **Show beta versions** in HACS.
 - ***Last communication* no longer stays `unknown` on modules without a LoRa
   radio.** It only ever read `lastRadioCommunication`, which is the gateway ↔
   controller radio contact and therefore absent on anything that reaches the
-  cloud directly. It now falls back to the module's own `seenAt` timestamp.
+  cloud directly. It now falls back to the module's own `seenAt`.
 
   This affected two cases: WiFi controllers such as the SMART-IS (as reported),
   and — found while investigating — **the LR-MB gateway itself**, whose sensor
@@ -64,11 +42,18 @@ install it, enable **Show beta versions** in HACS.
   device. LoRa controllers are unchanged.
   ([#7](https://github.com/antitoine/ha-solem-irrigation/issues/7))
 
-  ⚠️ **Partial for the gateway.** `seenAt` only exists on the module page,
-  which is read once at setup, so the gateway's value is a snapshot that
-  advances only when the integration reloads — it does not tick every 5
-  minutes the way a LoRa controller's does. Better than never having a value,
-  but not live; refreshing it properly is tracked separately.
+- **The *Battery* level and the gateway's *Last communication* now actually
+  update.** Both are read from a module's record, which came from the module
+  page — over a megabyte per module, so fetched once at setup. Everything taken
+  from it was therefore frozen until the next reload: measured on a real
+  LR-MB-10, its timestamp changed 3 times in 24 hours (once per reload) against
+  286 for the LoRa controller beside it. A battery level that can never fall is
+  the worse half: it would never have warned anyone.
+
+  Each poll now also re-reads just those few fields through the module
+  endpoint's field projection — **under a kilobyte for an entire account, in one
+  request** — and merges them in. A failure leaves the previous values in place
+  rather than blanking them.
 
 ### Changed
 
@@ -78,6 +63,17 @@ install it, enable **Show beta versions** in HACS.
 - README: documented that discovery is transport-agnostic — WiFi modules
   (SMART-IS) work exactly like LoRa ones, which was not stated anywhere.
   ([#7](https://github.com/antitoine/ha-solem-irrigation/issues/7))
+
+### Note for anyone who tested `0.8.0b1`
+
+
+That build's diagnostics file under-redacted four keys — `uuid` (which rebuilds
+the MAC and serial), `snapshotBy` (the account's user id), `locationKey` (an
+AccuWeather id resolving to the town) and `defaultName`. Each sat beside a key
+that *was* redacted, carrying the same identity in another encoding. Fixed in
+`0.8.0b2` and in this release, and the test suite now walks the whole payload
+rejecting any MAC- or UUID-shaped value. **If you downloaded a diagnostics file
+on `0.8.0b1`, delete it rather than attaching it anywhere.**
 
 ## [0.7.0] - 2026-09-20
 
@@ -281,9 +277,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0b2...HEAD
-[0.8.0b2]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0b1...v0.8.0b2
-[0.8.0b1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...v0.8.0b1
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0b3...HEAD
+[0.8.0b3]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...v0.8.0b3
 [0.7.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.1...v0.5.0
