@@ -261,6 +261,36 @@ class SolemApiClient:
         modules = data.get("modules", []) if isinstance(data, dict) else []
         return [m["id"] for m in modules if isinstance(m, dict) and m.get("id")]
 
+    async def async_get_module_fields(
+        self, field_names: tuple[str, ...]
+    ) -> dict[str, dict[str, Any]]:
+        """Return the requested fields for every module, keyed by module id.
+
+        The same endpoint as :meth:`async_get_module_ids`, which answers with
+        only ``id`` per module *unless* a ``fields`` projection is posted. That
+        makes it the cheap way to re-read a handful of values: roughly 400
+        bytes for a whole account in one request, against the module page's
+        megabyte-plus **per module**, so it is affordable on every poll.
+
+        Only stored columns can be projected. SOLEM's computed getters
+        (``isBattery``, ``isOnline``, ``typeIsWatering``, ``getBatteryLevel``…)
+        are silently omitted from the reply rather than erroring, so callers
+        must treat any requested key as optional -- which is why this merges
+        into an existing record instead of replacing it.
+        """
+        await self._ensure_login()
+        data = await self._request_json(
+            "POST",
+            f"/users/{self._user_id}/modules",
+            json_body={"fields": list(field_names)},
+        )
+        modules = data.get("modules", []) if isinstance(data, dict) else []
+        return {
+            record["id"]: record
+            for record in modules
+            if isinstance(record, dict) and record.get("id")
+        }
+
     async def async_get_module_page(
         self, module_id: str
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -396,13 +426,14 @@ class SolemApiClient:
         path: str,
         *,
         data: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         _retry: bool = True,
     ) -> str:
         url = f"{self._base}{path}"
         try:
             async with self._session.request(
-                method, url, data=data, headers=headers
+                method, url, data=data, json=json_body, headers=headers
             ) as resp:
                 text = await resp.text()
                 # An expired session bounces us to the login page.
@@ -412,7 +443,12 @@ class SolemApiClient:
                         self._user_id = None
                         await self.async_login()
                         return await self._request_text(
-                            method, path, data=data, headers=headers, _retry=False
+                            method,
+                            path,
+                            data=data,
+                            json_body=json_body,
+                            headers=headers,
+                            _retry=False,
                         )
                     raise SolemAuthError("Session expired and re-login failed")
                 resp.raise_for_status()
@@ -422,7 +458,12 @@ class SolemApiClient:
                 self._user_id = None
                 await self.async_login()
                 return await self._request_text(
-                    method, path, data=data, headers=headers, _retry=False
+                    method,
+                    path,
+                    data=data,
+                    json_body=json_body,
+                    headers=headers,
+                    _retry=False,
                 )
             raise SolemConnectionError(f"{method} {path} failed: {err}") from err
         except aiohttp.ClientError as err:

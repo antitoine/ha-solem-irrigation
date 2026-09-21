@@ -247,6 +247,52 @@ async def test_get_module_ids():
             assert await client.async_get_module_ids() == ["m1", "m2"]
 
 
+async def test_get_module_fields_posts_a_projection_and_keys_by_id():
+    """The projection is what makes re-reading a field affordable per poll.
+
+    The same endpoint answers with only ``id`` unless ``fields`` is posted, so
+    the body matters as much as the parsing.
+    """
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/users/{USER_ID}/modules",
+                body=json.dumps(
+                    {
+                        "modules": [
+                            {"id": "m1", "seenAt": "2026-09-21T18:00:00Z"},
+                            {"id": "g1", "battery": 3},
+                            {"battery": 9},  # no id -> unusable, dropped
+                        ]
+                    }
+                ),
+            )
+            result = await client.async_get_module_fields(("seenAt", "battery"))
+
+            assert set(result) == {"m1", "g1"}
+            assert result["m1"]["seenAt"] == "2026-09-21T18:00:00Z"
+            request = next(iter(m.requests.values()))[0]
+            assert request.kwargs["json"] == {"fields": ["seenAt", "battery"]}
+
+
+async def test_get_module_fields_tolerates_a_refused_field():
+    """Computed getters are omitted rather than erroring, so nothing may assume
+    a requested key comes back."""
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/users/{USER_ID}/modules",
+                body=json.dumps({"modules": [{"id": "m1"}]}),
+            )
+            assert await client.async_get_module_fields(("isBattery",)) == {
+                "m1": {"id": "m1"}
+            }
+
+
 async def test_get_module_parses_embedded_object():
     """The module record is read from the embedded ``let module`` object."""
     html = (

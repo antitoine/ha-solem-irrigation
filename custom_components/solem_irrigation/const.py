@@ -83,13 +83,38 @@ INPUT_UNIT_GALLON = 3
 #   lastRadioCommunication  the LoRa gateway <-> controller radio contact. Only
 #                           on LoRa children (lr-is, lr-ip, lr-mas...).
 #   seenAt                  the module's own contact with the cloud. On modules
-#                           that talk to it directly -- the LR-MB gateway, and
-#                           (unverified, no hardware to check) WiFi controllers
-#                           such as the SMART-IS, which have no LoRa radio and
-#                           therefore never report `lastRadioCommunication`.
+#                           that talk to it directly -- the LR-MB gateway
+#                           (verified), and (unverified, no hardware to check)
+#                           WiFi controllers such as the SMART-IS, which have no
+#                           LoRa radio and so never report
+#                           `lastRadioCommunication`. Kept fresh by
+#                           `LIVE_MODULE_FIELDS` below.
 #
 # Tried in order, so a LoRa module keeps the radio timestamp it has always had.
 LAST_COMMUNICATION_KEYS = ("lastRadioCommunication", "seenAt")
+
+# Fields re-read on every poll from the cheap projection endpoint, and merged
+# back into each module's record.
+#
+# The module page that first populates that record is well over a megabyte, so
+# it is fetched once at setup -- which used to leave everything read from it
+# frozen until the next reload: the gateway's `seenAt` (its only timestamp,
+# since its state endpoint answers 503) and every battery reading. The
+# projection returns these for a whole account in a few hundred bytes.
+#
+# Keep this list short and made only of *stored* columns; SOLEM's computed
+# getters (`isBattery`, `isOnline`, `typeIs*`) cannot be projected and are
+# simply absent from the reply. They are read at setup only, so that is fine.
+LIVE_MODULE_FIELDS = (
+    "seenAt",
+    "lastRadioCommunication",
+    "battery",
+    "batteryVoltage",
+    "batteryLow",
+    # Not surfaced yet: the likely wired rain-sensor contact (issue #8). Free to
+    # carry here, and it keeps a diagnostics dump honest about the live value.
+    "sensorState",
+)
 
 # Minutes between ticks when an input does not declare its own ``interval``.
 DEFAULT_INPUT_INTERVAL = 1

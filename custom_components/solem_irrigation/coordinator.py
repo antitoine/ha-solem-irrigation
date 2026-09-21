@@ -36,6 +36,7 @@ from .const import (
     FLOW_IDLE_AFTER,
     FLOW_WINDOW,
     INPUT_TYPE_FLOW_METER,
+    LIVE_MODULE_FIELDS,
     REGION_EUROPE,
     STORAGE_KEY,
     STORAGE_VERSION,
@@ -438,12 +439,42 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         if last_error is not None and not any(states.values()):
             raise UpdateFailed(str(last_error))
 
+        # Re-read the handful of module fields that only the (huge, setup-only)
+        # module page would otherwise provide. One small request for the whole
+        # account; a failure just leaves the previous values in place.
+        await self._async_refresh_module_fields()
+
         # Flow meters live on their own endpoints. A failure here never fails
         # the cycle: the watering state above stays the sole authority.
         for module_id in self.relevant_module_ids():
             if self.modules[module_id].flow_meters:
                 await self._async_poll_flow(module_id)
         return states
+
+    async def _async_refresh_module_fields(self) -> None:
+        """Merge the cheap per-module projection back into each module record.
+
+        ``raw`` is otherwise a setup-time snapshot: the module page costs more
+        than a megabyte per module, so it is read once. That froze the gateway's
+        ``seenAt`` -- its only communication timestamp, since its state endpoint
+        answers 503 -- and every battery level, until the next reload.
+
+        Merged rather than replaced, because the projection only returns stored
+        columns: the capability flags this integration classifies modules with
+        are computed getters and never come back.
+        """
+        try:
+            records = await self.client.async_get_module_fields(LIVE_MODULE_FIELDS)
+        except SolemAuthError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+        except SolemConnectionError as err:
+            _LOGGER.debug("Module field refresh failed: %s", err)
+            return
+        for module_id, record in records.items():
+            if module := self.modules.get(module_id):
+                module.raw.update(
+                    {k: v for k, v in record.items() if k in LIVE_MODULE_FIELDS}
+                )
 
     async def _async_poll_flow(self, module_id: str) -> None:
         """Refresh every flow-meter reading on a module.
