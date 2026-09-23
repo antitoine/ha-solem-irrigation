@@ -7,14 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.8.0b3] - 2026-09-21
-
-Third beta of 0.8.0. Everything below is what 0.8.0 will contain, so this
-section is written for someone coming from `0.7.0`.
-
-**New since `0.8.0b2`:** the *Battery* level and the gateway's *Last
-communication* now actually update — see the second entry under *Fixed*. That
-also retires the "partial for the gateway" caveat `0.8.0b2` shipped with.
+## [0.8.0] - 2026-09-23
 
 ### Added
 
@@ -66,12 +59,11 @@ also retires the "partial for the gateway" caveat `0.8.0b2` shipped with.
 
 ### Note for anyone who tested `0.8.0b1`
 
-
-That build's diagnostics file under-redacted four keys — `uuid` (which rebuilds
+That pre-release's diagnostics file under-redacted four keys — `uuid` (which rebuilds
 the MAC and serial), `snapshotBy` (the account's user id), `locationKey` (an
 AccuWeather id resolving to the town) and `defaultName`. Each sat beside a key
 that *was* redacted, carrying the same identity in another encoding. Fixed in
-`0.8.0b2` and in this release, and the test suite now walks the whole payload
+`0.8.0b2`, and the test suite now walks the whole payload
 rejecting any MAC- or UUID-shaped value. **If you downloaded a diagnostics file
 on `0.8.0b1`, delete it rather than attaching it anywhere.**
 
@@ -277,8 +269,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0b3...HEAD
-[0.8.0b3]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...v0.8.0b3
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.1...v0.5.0
