@@ -41,6 +41,10 @@ _STATE = (
     "custom_components.solem_irrigation.coordinator."
     "SolemApiClient.async_get_module_state"
 )
+_FIELDS = (
+    "custom_components.solem_irrigation.coordinator."
+    "SolemApiClient.async_get_module_fields"
+)
 _TICK = (
     "custom_components.solem_irrigation.coordinator."
     "SolemApiClient.async_get_last_input_tick"
@@ -82,6 +86,7 @@ async def test_setup_and_unload_entry(hass: HomeAssistant, entry) -> None:
         patch(_IDS, AsyncMock(return_value=["m1"])),
         patch(_GET, AsyncMock(return_value=(CONTROLLER, []))),
         patch(_STATE, AsyncMock(return_value={})),
+        patch(_FIELDS, AsyncMock(return_value={})),
         patch(
             "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
             new_callable=AsyncMock,
@@ -190,6 +195,7 @@ async def test_flow_meter_entities_are_accepted_by_home_assistant(
         patch(_IDS, AsyncMock(return_value=["m1"])),
         patch(_GET, AsyncMock(return_value=(CONTROLLER, [meter_input]))),
         patch(_STATE, AsyncMock(return_value={})),
+        patch(_FIELDS, AsyncMock(return_value={})),
         patch(_SENSOR_DATA, AsyncMock(return_value=series)),
         patch(
             _TICK,
@@ -230,6 +236,7 @@ async def test_controller_is_linked_to_its_gateway(hass: HomeAssistant, entry) -
         patch(_IDS, AsyncMock(return_value=["m1", "g1"])),
         patch(_GET, AsyncMock(side_effect=lambda module_id: pages[module_id])),
         patch(_STATE, AsyncMock(side_effect=lambda module_id: states[module_id])),
+        patch(_FIELDS, AsyncMock(return_value={})),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -255,6 +262,7 @@ async def test_unlinkable_relay_leaves_no_via_device(
         patch(_IDS, AsyncMock(return_value=["m1"])),
         patch(_GET, AsyncMock(return_value=(CONTROLLER, []))),
         patch(_STATE, AsyncMock(return_value={"relay": relay})),
+        patch(_FIELDS, AsyncMock(return_value={})),
         patch(
             "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
             new_callable=AsyncMock,

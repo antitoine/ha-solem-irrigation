@@ -7,13 +7,21 @@
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-donate-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/antitoine)
 
 A custom [Home Assistant](https://www.home-assistant.io/) integration for
-**SOLEM** connected irrigation controllers (LR-IS / LR-IP and similar LoRa
-modules) reached through a SOLEM **LR-MB** WiFi gateway and the **MySOLEM**
+**SOLEM** connected irrigation controllers reached through the **MySOLEM**
 cloud.
 
 It talks to the same cloud backend as the [mysolem.com](https://mysolem.com)
-web app (a session-cookie API), so it works for LoRa controllers that the
-Bluetooth-only community integrations cannot reach.
+web app (a session-cookie API), so it reaches controllers that the
+Bluetooth-only community integrations cannot.
+
+**Which hardware works:** anything MySOLEM itself lists as a watering device
+with at least one station. Discovery does not care how a controller reaches the
+cloud, so LoRa modules behind an **LR-MB** gateway (LR-IS / LR-IP …) and
+**WiFi** modules (SMART-IS …) are both picked up, with no configuration
+difference. Development happens against an LR-IS behind an LR-MB-10; other
+models are reported working by their owners. If yours is not detected, please
+[open an issue](https://github.com/antitoine/ha-solem-irrigation/issues) with a
+diagnostics file — see [Reporting a problem](#reporting-a-problem).
 
 > ⚠️ **Unofficial.** This integration is not affiliated with or endorsed by
 > SOLEM. It uses a private API reverse-engineered from the MySOLEM web app,
@@ -34,7 +42,7 @@ your account:
 | **Switch** *Irrigation enabled* | Turn the controller on, or off permanently (assumed state). |
 | **Number** *Rain delay* | Disable for N days (0 = enabled) — SOLEM's "Report de pluie". |
 | **Sensor** *Watering station* | Name of the station currently watering (idle = none). |
-| **Sensor** *Last communication* | Last radio contact with the module. |
+| **Sensor** *Last communication* | When the module last talked to the cloud — the LoRa radio contact for modules behind a gateway, the module's own connection for the gateway and for WiFi controllers. |
 | **Sensor** *Battery* | Battery indicator (battery-powered modules). |
 | **Sensor** *&lt;meter&gt; water used* | SOLEM's lifetime water counter, for controllers with a flow meter (débitmètre). Add it to the Home Assistant **Water** dashboard. |
 | **Sensor** *&lt;meter&gt; flow rate* | How fast water is flowing right now — non-zero outside a watering run means a leak. |
@@ -106,6 +114,34 @@ pool integration, not this one.)
   meter only records a reading while water actually flows, so *flow rate* is
   derived from the last minutes of readings; it reads `0` when idle and can be
   briefly unknown in the first minute of a run.
+
+## Reporting a problem
+
+MySOLEM's API is private, undocumented, and returns different fields for
+different hardware — and this integration is developed against exactly one
+setup. So for anything hardware-specific, a **diagnostics file** is far more
+useful than a description, and usually decides whether something is fixable at
+all.
+
+**Settings → Devices & Services → SOLEM Irrigation → ⋮ → Download
+diagnostics**, then attach the file to your issue.
+
+It contains, for every module on your account (including the ones the
+integration ignores): the raw module record, **every** sensor input — not just
+the ones that currently become entities — and the live state. Credentials,
+serial numbers and your location are redacted automatically; module **names**
+are kept, since they are what an issue refers to, so rename them in MySOLEM
+first if any of yours is personal.
+
+If a sensor you own is missing, debug logs also help: they list every module
+with its input types.
+
+```yaml
+logger:
+  default: info
+  logs:
+    custom_components.solem_irrigation: debug
+```
 
 ## Credits
 

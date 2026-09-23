@@ -99,6 +99,9 @@ async def coordinator(hass) -> SolemDataUpdateCoordinator:
     coord = SolemDataUpdateCoordinator(hass, entry)
     coord._store.async_load = AsyncMock(return_value=None)
     coord._store.async_save = AsyncMock()
+    # Every poll now also re-reads the cheap module-field projection; tests that
+    # care about it override this.
+    coord.client.async_get_module_fields = AsyncMock(return_value={})
     return coord
 
 
@@ -221,6 +224,109 @@ async def test_setup_discovers_and_classifies_modules(coordinator):
     assert coordinator.modules["m1"].stations[0].name == "Z1"
     assert coordinator.modules["pool"].is_controller is False
     assert coordinator.modules["g1"].is_controller is False
+
+
+async def test_setup_keeps_every_input_not_just_flow_meters(coordinator):
+    """``raw_inputs`` keeps the sensors the integration does not model yet.
+
+    A rain gauge or a soil probe is an input of some other type, which
+    ``_build_flow_meters`` drops -- and ``raw`` (the ``let module`` object) does
+    not carry the inputs at all. Without this, such a sensor is invisible even
+    in diagnostics, which is what issue #8 is blocked on.
+    """
+    moisture = {"id": "i2", "type": 4, "index": 2, "getName": "Sonde d'humidité"}
+    coordinator.client.async_login = AsyncMock(return_value="uid")
+    coordinator.client.async_get_module_ids = AsyncMock(return_value=["m1"])
+    coordinator.client.async_get_module_page = AsyncMock(
+        return_value=(
+            {
+                "name": "Ctrl",
+                "type": "LR-IS",
+                "typeIsWatering": True,
+                "outputs": [{"id": "o1", "name": "Z1", "index": 1}],
+            },
+            [dict(FLOW_INPUT), moisture],
+        )
+    )
+
+    await coordinator.async_setup()
+
+    module = coordinator.modules["m1"]
+    assert [m.id for m in module.flow_meters] == ["i1"]
+    assert module.raw_inputs == [dict(FLOW_INPUT), moisture]
+    assert "i2" not in str(module.raw)
+
+
+async def test_poll_refreshes_the_fields_the_module_page_would_freeze(coordinator):
+    """The gateway's `seenAt` and every battery level must keep moving.
+
+    `raw` comes from a >1 MB module page read once at setup, so before this
+    those values only changed on a reload -- measured as 3 changes in 24 h on a
+    real LR-MB-10 against 286 for a LoRa controller.
+    """
+    gateway = _module(id="g1", raw={"seenAt": "2026-09-21T06:00:00Z", "battery": 5})
+    coordinator.modules = {"g1": gateway}
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_fields = AsyncMock(
+        return_value={
+            "g1": {"id": "g1", "seenAt": "2026-09-21T18:00:00Z", "battery": 3}
+        }
+    )
+
+    await coordinator._async_update_data()
+
+    assert gateway.raw["seenAt"] == "2026-09-21T18:00:00Z"
+    assert gateway.raw["battery"] == 3
+
+
+async def test_field_refresh_merges_and_never_drops_capability_flags(coordinator):
+    """The projection returns stored columns only, so it must not replace `raw`.
+
+    `typeIsWatering` and friends are computed getters SOLEM will not project;
+    replacing the record instead of merging would declassify every controller.
+    """
+    module = _module(id="m1", raw={"typeIsWatering": True, "battery": 5})
+    coordinator.modules = {"m1": module}
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_fields = AsyncMock(
+        return_value={
+            "m1": {"id": "m1", "battery": 4},
+            "ghost": {"id": "ghost", "battery": 1},  # not a module we know
+        }
+    )
+
+    await coordinator._async_update_data()
+
+    assert module.raw["battery"] == 4
+    assert module.raw["typeIsWatering"] is True
+    assert module.is_controller is True
+    assert "ghost" not in coordinator.modules
+
+
+async def test_field_refresh_failure_keeps_the_previous_values(coordinator):
+    """A blank battery or timestamp is worse than a slightly stale one."""
+    module = _module(id="m1", raw={"typeIsWatering": True, "battery": 5})
+    coordinator.modules = {"m1": module}
+    coordinator.client.async_get_module_state = AsyncMock(return_value={"ok": 1})
+    coordinator.client.async_get_module_fields = AsyncMock(
+        side_effect=SolemConnectionError("boom")
+    )
+
+    result = await coordinator._async_update_data()
+
+    assert result == {"m1": {"ok": 1}}  # the cycle still succeeds
+    assert module.raw["battery"] == 5
+
+
+async def test_field_refresh_auth_failure_is_reauth(coordinator):
+    coordinator.modules = {"m1": _module(id="m1")}
+    coordinator.client.async_get_module_state = AsyncMock(return_value={"ok": 1})
+    coordinator.client.async_get_module_fields = AsyncMock(
+        side_effect=SolemAuthError("nope")
+    )
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
 
 
 async def test_setup_skips_module_that_errors(coordinator):

@@ -66,3 +66,19 @@ body:
             custom_components.solem_irrigation: debug
         ```
       render: shell
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        **This is the single most useful thing you can attach.** SOLEM's API is
+        private and undocumented, and I only own one kind of hardware — the
+        diagnostics file is usually the difference between "I can fix this" and
+        "I can only guess".
+
+        **Settings → Devices & Services → SOLEM Irrigation → ⋮ → Download
+        diagnostics**, then drag the file into this box.
+
+        Credentials, serial numbers and your location are redacted
+        automatically. Module *names* are kept (they are what we'll refer to) —
+        rename them in MySOLEM first if any of them is personal.

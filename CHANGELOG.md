@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-23
+
+### Added
+
+- **Diagnostics.** The integration page now offers **⋮ → Download diagnostics**,
+  which dumps, for every module on the account (including those the integration
+  ignores): the raw module record, **every** sensor input — not only the flow
+  meters that currently become entities — and the live state. Credentials,
+  serial numbers, hardware identifiers and location are redacted.
+
+  SOLEM's API is private and undocumented and returns different fields for
+  different hardware, so this is what makes a report about hardware the
+  maintainer does not own actionable. The bug-report and feature-request
+  templates now ask for it.
+
+### Fixed
+
+- ***Last communication* no longer stays `unknown` on modules without a LoRa
+  radio.** It only ever read `lastRadioCommunication`, which is the gateway ↔
+  controller radio contact and therefore absent on anything that reaches the
+  cloud directly. It now falls back to the module's own `seenAt`.
+
+  This affected two cases: WiFi controllers such as the SMART-IS (as reported),
+  and — found while investigating — **the LR-MB gateway itself**, whose sensor
+  had been permanently `unknown` on every installation since it first got a
+  device. LoRa controllers are unchanged.
+  ([#7](https://github.com/antitoine/ha-solem-irrigation/issues/7))
+
+- **The *Battery* level and the gateway's *Last communication* now actually
+  update.** Both are read from a module's record, which came from the module
+  page — over a megabyte per module, so fetched once at setup. Everything taken
+  from it was therefore frozen until the next reload: measured on a real
+  LR-MB-10, its timestamp changed 3 times in 24 hours (once per reload) against
+  286 for the LoRa controller beside it. A battery level that can never fall is
+  the worse half: it would never have warned anyone.
+
+  Each poll now also re-reads just those few fields through the module
+  endpoint's field projection — **under a kilobyte for an entire account, in one
+  request** — and merges them in. A failure leaves the previous values in place
+  rather than blanking them.
+
+### Changed
+
+- The discovery debug log now reports each module's input count and input
+  types, so a sensor the integration does not model yet is visible from the log
+  alone.
+- README: documented that discovery is transport-agnostic — WiFi modules
+  (SMART-IS) work exactly like LoRa ones, which was not stated anywhere.
+  ([#7](https://github.com/antitoine/ha-solem-irrigation/issues/7))
+
+### Note for anyone who tested `0.8.0b1`
+
+That pre-release's diagnostics file under-redacted four keys — `uuid` (which rebuilds
+the MAC and serial), `snapshotBy` (the account's user id), `locationKey` (an
+AccuWeather id resolving to the town) and `defaultName`. Each sat beside a key
+that *was* redacted, carrying the same identity in another encoding. Fixed in
+`0.8.0b2`, and the test suite now walks the whole payload
+rejecting any MAC- or UUID-shaped value. **If you downloaded a diagnostics file
+on `0.8.0b1`, delete it rather than attaching it anywhere.**
+
 ## [0.7.0] - 2026-09-20
 
 ### Changed
@@ -209,7 +269,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.4.1...v0.5.0
