@@ -58,6 +58,8 @@ maintainable.
     flow meter *water used* (cumulative) + *flow rate*, and per rain gauge
     *rainfall* (cumulative).
   - `binary_sensor.py` — per rain gauge *rain threshold* (SOLEM's flag).
+- **`diagnostics.py`** — the raw dump users attach to issues, including a live
+  sample of every input's recent readings.
 - **`config_flow.py`** — setup (email / password / region) with re-auth.
 - **`const.py`** — domain, regions/base URLs, command vocabulary, service names.
 - **`tests/`** — `pytest` suite mirroring the source. Pure logic and entity

@@ -7,12 +7,13 @@ worth guarding are opposites: nothing sensitive may survive, and everything
 
 import json
 import re
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.components.diagnostics import REDACTED
 from homeassistant.util import dt as dt_util
 
+from custom_components.solem_irrigation.api import SolemConnectionError
 from custom_components.solem_irrigation.coordinator import (
     SolemDataUpdateCoordinator,
     SolemFlowMeter,
@@ -25,7 +26,8 @@ from custom_components.solem_irrigation.diagnostics import (
     async_get_config_entry_diagnostics,
 )
 
-# An input type the integration does not model: this is what issue #8 is about.
+# An input type the integration does not model (it was a stand-in for the rain
+# gauge of issue #8 before SOLEM's real type, 14, was known and modelled).
 RAIN_INPUT = {
     "id": "i9",
     "type": 42,
@@ -79,7 +81,8 @@ def module() -> SolemModule:
                 raw=dict(FLOW_INPUT),
             )
         ],
-        raw_inputs=[dict(FLOW_INPUT), dict(RAIN_INPUT)],
+        # Type 0 is an empty input slot, as on a real LR-IP-ECO.
+        raw_inputs=[dict(FLOW_INPUT), dict(RAIN_INPUT), {"id": "i0", "type": 0}],
     )
 
 
@@ -103,6 +106,25 @@ def entry(module) -> MagicMock:
             record=dict(FLOW_INPUT),
         )
     }
+    coordinator.rain = {}
+    coordinator.client = MagicMock()
+    coordinator.client.async_get_module_sensor_data = AsyncMock(
+        return_value=[
+            {
+                **RAIN_INPUT,
+                "name": "",
+                "isLastMeasureBeyondThresholds": True,
+                "computedSensorData": [
+                    {"tickTimestamp": f"2026-09-21T05:{m:02d}:00.000Z", "value": m}
+                    for m in range(59, -1, -1)
+                ]
+                + [{"tickTimestamp": "2026-09-21T06:00:00.000Z", "value": 0.5}],
+            }
+        ]
+    )
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        return_value={"value": 7, "timestamp": "2026-09-21T06:00:00.000Z"}
+    )
     entry = MagicMock()
     entry.runtime_data = coordinator
     entry.data = {"email": "e@x.com", "password": "pw", "region": "Europe"}
@@ -230,3 +252,44 @@ async def test_diagnostics_includes_state_and_flow(hass, entry):
     assert result["modules"]["m1"]["is_relevant"] is True
     assert result["flow_readings"]["i1"]["volume"] == 3970.0
     assert result["coordinator"]["last_update_success"] is True
+
+
+async def test_diagnostics_samples_what_each_input_reported(hass, entry):
+    """An unmodelled sensor's readings are what reveal its scale (#12)."""
+    result = await async_get_config_entry_diagnostics(hass, entry)
+    samples = result["modules"]["m1"]["input_samples"]
+
+    rain = samples["i9"]
+    assert rain["last_tick"] == {"value": 7, "timestamp": "2026-09-21T06:00:00.000Z"}
+    # A busy meter is capped, keeping the newest ticks.
+    assert rain["window_tick_count"] == 61
+    assert len(rain["window_ticks"]) == 60
+    assert rain["window_ticks"][-1]["value"] == 0.5
+    # Only what moved since setup is repeated.
+    assert rain["changed_since_setup"] == {"isLastMeasureBeyondThresholds": True}
+    # An input the window did not mention still gets its last tick...
+    assert samples["i1"]["window_tick_count"] == 0
+    assert "last_tick" in samples["i1"]
+    # ...and an empty slot costs no request at all.
+    assert "i0" not in samples
+
+
+async def test_diagnostics_records_sample_failures_instead_of_raising(hass, entry):
+    """A cloud hiccup must still leave a usable dump."""
+    client = entry.runtime_data.client
+    client.async_get_module_sensor_data.side_effect = SolemConnectionError("503")
+    client.async_get_last_input_tick.side_effect = SolemConnectionError("timeout")
+
+    samples = (await async_get_config_entry_diagnostics(hass, entry))["modules"]["m1"][
+        "input_samples"
+    ]
+
+    assert samples["window_error"] == "503"
+    assert samples["i9"]["last_tick_error"] == "timeout"
+
+
+async def test_diagnostics_skips_sampling_a_module_without_inputs(hass, entry, module):
+    module.raw_inputs = []
+    result = await async_get_config_entry_diagnostics(hass, entry)
+    assert result["modules"]["m1"]["input_samples"] == {}
+    entry.runtime_data.client.async_get_module_sensor_data.assert_not_awaited()

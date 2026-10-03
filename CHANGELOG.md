@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   integration no longer exposes can now be deleted, even if the old module is
   still listed in MySOLEM; one still exposed is refused, as it would only come
   back.
+- **Diagnostics now include each sensor's recent readings.** For every
+  configured input — modelled or not — the dump carries its newest raw tick and
+  up to 60 scaled ticks from the last 24 hours, plus any flag that changed since
+  setup. The module page holds no readings at all, so for a sensor the
+  integration does not model yet (such as the LR-IP-ECO's turbine flow meter,
+  [#12](https://github.com/antitoine/ha-solem-irrigation/issues/12)), this is
+  what reveals its scale and behaviour.
 
 ## [0.8.1] - 2026-10-04
 

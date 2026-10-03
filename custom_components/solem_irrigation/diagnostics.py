@@ -6,20 +6,29 @@ undocumented. This dump exists so a user can answer "what does your account
 actually return?" in one click instead of a mail exchange.
 
 It is therefore deliberately *raw*: the unparsed module record, **every** input
-(not just the flow meters the integration models today), and the live state, for
-**every** module on the account -- including the ones ``relevant_module_ids()``
-filters out, since a sensor the integration ignores may be exactly the one being
-asked about.
+(not just the sensors the integration models today) with what it reported over
+the last day, and the live state, for **every** module on the account --
+including the ones ``relevant_module_ids()`` filters out, since a sensor the
+integration ignores may be exactly the one being asked about.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
-from .coordinator import SolemConfigEntry
+from .api import SolemApiClient, SolemError
+from .coordinator import SolemConfigEntry, SolemModule
+
+# How far back each sensor's readings are fetched, and how many are kept. A day
+# covers the watering run or the shower a reporter is asked to reproduce; the
+# cap stops a busy meter (a tick a minute) from burying everything else.
+SAMPLE_WINDOW = timedelta(hours=24)
+SAMPLE_MAX_TICKS = 60
 
 # Redaction is a *denylist*, on purpose. The whole value of this file is that it
 # shows keys nobody has modelled yet, so an allowlist would filter out the one
@@ -82,7 +91,60 @@ TO_REDACT = {
 TO_DROP = ("weatherForecast",)
 
 
-def _module_diagnostics(
+def _iso(moment: datetime) -> str:
+    return moment.isoformat().replace("+00:00", "Z")
+
+
+async def _input_samples(client: SolemApiClient, module: SolemModule) -> dict[str, Any]:
+    """Fetch, live, what each of a module's sensors reported lately.
+
+    ``raw_inputs`` holds no readings at all, and the integration only polls the
+    inputs it models -- so for any other sensor, this is the one place its
+    values, and therefore their scale, can be seen. A failure is recorded
+    rather than raised: a partial dump beats none.
+    """
+    # Type 0 is an input slot nothing is wired to.
+    inputs = [record for record in module.raw_inputs if record.get("type")]
+    if not inputs:
+        return {}
+    now = dt_util.utcnow()
+    samples: dict[str, Any] = {}
+    try:
+        window = await client.async_get_module_sensor_data(
+            module.id, _iso(now - SAMPLE_WINDOW), _iso(now)
+        )
+    except SolemError as err:
+        window = []
+        samples["window_error"] = str(err)
+    by_id = {record["id"]: record for record in window if record.get("id")}
+    for record in inputs:
+        live = by_id.get(record["id"], {})
+        ticks = live.get("computedSensorData") or []
+        sample: dict[str, Any] = {
+            "type": record.get("type"),
+            "window_tick_count": len(ticks),
+            # Already scaled by the cloud (``forceRawOrComputed=computed``).
+            "window_ticks": ticks[-SAMPLE_MAX_TICKS:],
+            # Only what moved since setup: the rest is in ``raw_inputs``. The
+            # window's ``name`` is always blank (the client fills the setup copy
+            # from the page's label), so it would only add noise.
+            "changed_since_setup": {
+                key: value
+                for key, value in live.items()
+                if key not in ("computedSensorData", "name")
+                and record.get(key) != value
+            },
+        }
+        try:
+            # Raw: scale it with the input's ``expression``.
+            sample["last_tick"] = await client.async_get_last_input_tick(record["id"])
+        except SolemError as err:
+            sample["last_tick_error"] = str(err)
+        samples[record["id"]] = sample
+    return samples
+
+
+async def _module_diagnostics(
     coordinator: Any, module: Any, relevant: set[str]
 ) -> dict[str, Any]:
     """Return everything known about one module."""
@@ -103,11 +165,16 @@ def _module_diagnostics(
             }
             for m in module.flow_meters
         ],
+        "rain_gauges": [
+            {"name": g.name, "index": g.index, "expression": g.expression}
+            for g in module.rain_gauges
+        ],
         # The two raw payloads. ``raw`` is the embedded ``let module`` object;
         # ``raw_inputs`` is the unfiltered sensor list, which ``raw`` does not
         # contain and which is where an unmodelled sensor shows up.
         "raw": {k: v for k, v in module.raw.items() if k not in TO_DROP},
         "raw_inputs": module.raw_inputs,
+        "input_samples": await _input_samples(coordinator.client, module),
         "state": coordinator.module_state(module.id),
     }
 
@@ -140,8 +207,16 @@ async def async_get_config_entry_diagnostics(
             }
             for meter_id, reading in coordinator.flow.items()
         },
+        "rain_readings": {
+            gauge_id: {
+                "total": reading.total,
+                "raw_total": reading.raw_total,
+                "timestamp": reading.timestamp.isoformat(),
+            }
+            for gauge_id, reading in coordinator.rain.items()
+        },
         "modules": {
-            module_id: _module_diagnostics(coordinator, module, relevant)
+            module_id: await _module_diagnostics(coordinator, module, relevant)
             for module_id, module in coordinator.modules.items()
         },
     }

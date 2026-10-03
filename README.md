@@ -152,7 +152,9 @@ diagnostics**, then attach the file to your issue.
 
 It contains, for every module on your account (including the ones the
 integration ignores): the raw module record, **every** sensor input — not just
-the ones that currently become entities — and the live state. Credentials,
+the ones that currently become entities — with what it reported over the last
+24 hours, and the live state. If your issue is about a sensor, download it
+shortly after that sensor has measured something (a watering run, a shower). Credentials,
 serial numbers and your location are redacted automatically; module **names**
 are kept, since they are what an issue refers to, so rename them in MySOLEM
 first if any of yours is personal.
