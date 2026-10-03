@@ -15,6 +15,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.solem_irrigation import (
     PLATFORMS,
     _async_cleanup_legacy_entities,
+    async_remove_config_entry_device,
     async_setup_entry,
     async_unload_entry,
 )
@@ -364,3 +365,30 @@ async def test_an_account_of_bluetooth_only_controllers_loads(
 
     assert entry.state is ConfigEntryState.LOADED
     state.assert_not_awaited()
+
+
+async def test_only_a_device_that_left_the_account_can_be_removed(
+    hass: HomeAssistant, entry
+) -> None:
+    """A replaced gateway leaves an orphan device the user must be able to delete.
+
+    Including when the dead gateway is still listed in MySOLEM: it is then still
+    a module of the account, but no controller relays through it anymore, so
+    the integration no longer exposes it.
+    """
+    entry.runtime_data = MagicMock(modules={"m1": MagicMock(), "dead-gw": MagicMock()})
+    entry.runtime_data.relevant_module_ids.return_value = {"m1"}
+    registry = dr.async_get(hass)
+    current = registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "m1")}
+    )
+    still_listed = registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "dead-gw")}
+    )
+    gone = registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "old-gateway")}
+    )
+
+    assert await async_remove_config_entry_device(hass, entry, current) is False
+    assert await async_remove_config_entry_device(hass, entry, still_listed) is True
+    assert await async_remove_config_entry_device(hass, entry, gone) is True

@@ -103,6 +103,24 @@ def _async_cleanup_legacy_entities(
             entity_registry.async_remove(entity.entity_id)
 
 
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: SolemConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Let the user delete a device the integration no longer exposes.
+
+    A replaced gateway or controller is a new module with a new id, so the old
+    device would otherwise linger forever with every entity unavailable --
+    whether or not the old module is still listed in MySOLEM, since a gateway
+    no controller relays through anymore stops being exposed either way. One
+    still exposed is refused: setup would only register it again.
+    """
+    exposed = entry.runtime_data.relevant_module_ids()
+    return not any(
+        domain == DOMAIN and module_id in exposed
+        for domain, module_id in device_entry.identifiers
+    )
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: SolemConfigEntry) -> bool:
     """Unload a config entry."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

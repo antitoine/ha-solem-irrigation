@@ -14,9 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *&lt;gauge&gt; rainfall* sensor — SOLEM's lifetime total in mm, ready for
   long-term statistics and a `utility_meter` — and a *&lt;gauge&gt; rain
   threshold* binary sensor carrying SOLEM's own "beyond thresholds" flag as-is,
-  with the threshold set in MySOLEM as an attribute. Identified by SOLEM's own input type (14), as
-  listed in its web app; the scaling is the per-gauge expression SOLEM ships.
+  with the threshold set in MySOLEM as an attribute. Identified by SOLEM's own
+  input type (14), as listed in its web app; the scaling is the per-gauge
+  expression SOLEM ships.
   ([#8](https://github.com/antitoine/ha-solem-irrigation/issues/8))
+- **Leftover devices can be deleted.** A replaced gateway or controller is a
+  new module, so its old device used to linger forever with every entity
+  *unavailable*, and Home Assistant offered no way to remove it. Any device the
+  integration no longer exposes can now be deleted, even if the old module is
+  still listed in MySOLEM; one still exposed is refused, as it would only come
+  back.
 
 ## [0.8.1] - 2026-10-04
 

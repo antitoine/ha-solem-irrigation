@@ -70,7 +70,9 @@ you set one); use `solem_irrigation.run` to run for a specific duration, which
 then becomes the new remembered default.
 
 Every module (including the gateway) appears as a Home Assistant **device**;
-controllers are linked to the gateway they communicate through.
+controllers are linked to the gateway they communicate through. A module you
+replace (a new gateway, a swapped controller) comes back as a new device; the
+old one can then be deleted from its device page.
 
 ## Installation
 

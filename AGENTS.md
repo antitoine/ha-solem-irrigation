@@ -42,7 +42,8 @@ maintainable.
 - **`__init__.py`** — entry setup / unload, legacy-entity cleanup, and the
   device pre-registration that also links each controller to its LoRa gateway.
   The link uses `via_device_id`, which needs a device-registry id, so it cannot
-  live in an entity's `device_info`.
+  live in an entity's `device_info`. Also the removal hook that lets a user
+  delete a device the integration no longer exposes.
 - **`entity.py`** — base `CoordinatorEntity` sharing `device_info` across
   platforms.
 - **Platforms** — thin wrappers over coordinator data:
