@@ -18,7 +18,10 @@ from custom_components.solem_irrigation import (
     async_setup_entry,
     async_unload_entry,
 )
-from custom_components.solem_irrigation.api import SolemAuthError
+from custom_components.solem_irrigation.api import (
+    SolemAuthError,
+    SolemConnectionError,
+)
 from custom_components.solem_irrigation.const import (
     CONF_EMAIL,
     CONF_PASSWORD,
@@ -275,3 +278,24 @@ async def test_unlinkable_relay_leaves_no_via_device(
     )
     assert device is not None
     assert device.via_device_id is None
+
+
+async def test_an_account_of_bluetooth_only_controllers_loads(
+    hass: HomeAssistant, entry
+) -> None:
+    """The cloud can never reach a BL-IP; that must not block setup (#11)."""
+    bl_ip = {**CONTROLLER, "name": "Tennis", "type": "bl-ip", "isBluetoothOnly": True}
+    state = AsyncMock(side_effect=SolemConnectionError("503 Service Unavailable"))
+
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["b1"])),
+        patch(_GET, AsyncMock(return_value=(bl_ip, []))),
+        patch(_STATE, state),
+        patch(_FIELDS, AsyncMock(return_value={})),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    state.assert_not_awaited()
