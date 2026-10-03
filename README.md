@@ -18,8 +18,11 @@ Bluetooth-only community integrations cannot.
 with at least one station. Discovery does not care how a controller reaches the
 cloud, so LoRa modules behind an **LR-MB** gateway (LR-IS / LR-IP …) and
 **WiFi** modules (SMART-IS …) are both picked up, with no configuration
-difference. Development happens against an LR-IS behind an LR-MB-10; other
-models are reported working by their owners. If yours is not detected, please
+difference. **Bluetooth-only** modules (BL-IP …) are the exception: MySOLEM
+has no live link to them, so the cloud cannot report what they are doing —
+see [limitations](#how-it-works--limitations). Development happens against an
+LR-IS behind an LR-MB-10; other models are reported working by their owners. If
+yours is not detected, please
 [open an issue](https://github.com/antitoine/ha-solem-irrigation/issues) with a
 diagnostics file — see [Reporting a problem](#reporting-a-problem).
 
@@ -104,6 +107,13 @@ pool integration, not this one.)
   few seconds to a minute to actually act. The integration updates the UI
   optimistically and then reconciles with the controller on the next poll.
 - State is polled every 5 minutes (polling faster does not give fresher data).
+- **Bluetooth-only modules** (BL-IP and the other `bl-*` models) are only ever
+  reached by a phone standing next to them; MySOLEM has no gateway or WiFi link
+  to them, and its own web app does not even try to read their state. The
+  integration therefore never polls them and logs a warning naming them. For
+  these, a Bluetooth integration such as
+  [Solem Toolkit](https://github.com/hcraveiro/Home-Assistant-Solem-Toolkit) is
+  the realistic route.
 - The *Irrigation enabled* switch and the *Rain delay* number are **assumed
   state** (the cloud exposes no reliable read-back); their values are restored
   across restarts. They both drive the controller's on/off, so they can show

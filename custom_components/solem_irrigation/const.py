@@ -116,6 +116,25 @@ LIVE_MODULE_FIELDS = (
     "sensorState",
 )
 
+# Module types MySOLEM can only ever reach over a phone's Bluetooth, copied from
+# the web app's own list. The cloud has no live link to them -- no gateway, no
+# WiFi -- so their state endpoint answers 503 by design, and the web app never
+# asks it. Only a fallback: SOLEM's own ``isBluetoothOnly`` flag on the module
+# record is read first, and this covers a record that lacks it.
+BLUETOOTH_ONLY_TYPES = frozenset(
+    {
+        "bl-ag",
+        "bl-ip",
+        "bl-ip-v2",
+        "bl-is",
+        "bl-nr-v2",
+        "bl-ol",
+        "bl-pc",
+        "joro",
+        "joro-v2",
+    }
+)
+
 # Minutes between ticks when an input does not declare its own ``interval``.
 DEFAULT_INPUT_INTERVAL = 1
 

@@ -26,6 +26,7 @@ from .api import (
     apply_expression,
 )
 from .const import (
+    BLUETOOTH_ONLY_TYPES,
     CONF_EMAIL,
     CONF_PASSWORD,
     CONF_REGION,
@@ -233,6 +234,18 @@ class SolemModule:
         """
         return bool(self.stations) and bool(self.raw.get("typeIsWatering"))
 
+    @property
+    def is_bluetooth_only(self) -> bool:
+        """True for a module only a phone can reach, over Bluetooth (BL-IP…).
+
+        The cloud has no live link to such a module, so its state endpoint
+        answers 503 on every request. SOLEM's own ``isBluetoothOnly`` flag
+        decides, with the web app's list of types as a fallback.
+        """
+        return bool(self.raw.get("isBluetoothOnly")) or (
+            self.type in BLUETOOTH_ONLY_TYPES
+        )
+
     def find_station(self, token: str | int) -> SolemStation | None:
         """Return the station matching ``token`` (name or index), if any."""
         return _find_by_token(self.stations, token)
@@ -407,6 +420,15 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 )
             self.modules = modules
 
+            if bluetooth_only := [m for m in modules.values() if m.is_bluetooth_only]:
+                _LOGGER.warning(
+                    "SOLEM: %s can only be reached over Bluetooth from a phone. "
+                    "MySOLEM has no live link to such a module, so its watering "
+                    "state cannot be read from Home Assistant and its entities "
+                    "will not reflect what it is doing",
+                    ", ".join(f"{m.name} ({m.type})" for m in bluetooth_only),
+                )
+
             controllers = [m for m in modules.values() if m.is_controller]
             if not controllers:
                 _LOGGER.warning(
@@ -425,7 +447,12 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         """Poll the live watering state of every known module."""
         states: dict[str, dict[str, Any]] = {}
         last_error: SolemConnectionError | None = None
-        for module_id in self.modules:
+        for module_id, module in self.modules.items():
+            if module.is_bluetooth_only:
+                # Its 503 is permanent, not an outage. Polling it anyway made an
+                # account holding only Bluetooth modules fail every cycle, so
+                # setup never completed (#11). The web app skips it too.
+                continue
             try:
                 states[module_id] = await self.client.async_get_module_state(module_id)
             except SolemAuthError as err:

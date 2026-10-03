@@ -129,6 +129,19 @@ def test_is_controller():
     assert _module(raw={"typeIsWatering": True}, stations=[]).is_controller is False
 
 
+def test_is_bluetooth_only():
+    # SOLEM's own flag decides...
+    assert _module(raw={"isBluetoothOnly": True}).is_bluetooth_only is True
+    # ...with the web app's list of types as a fallback when the flag is absent.
+    assert _module(type="bl-ip", raw={}).is_bluetooth_only is True
+    # A LoRa controller is also Bluetooth-capable, but not *only* Bluetooth.
+    assert (
+        _module(type="lr-ip-eco", raw={"isBluetoothOnly": False}).is_bluetooth_only
+        is False
+    )
+    assert _module().is_bluetooth_only is False
+
+
 def test_find_station_and_program():
     module = _module()
     assert module.find_station("Pelouse 1").id == "s1"
@@ -393,6 +406,37 @@ async def test_update_data_partial_failure_is_tolerated(coordinator):
     result = await coordinator._async_update_data()
     assert result["m1"] == {"ok": 1}
     assert result["g1"] == {}  # no prior data kept
+
+
+async def test_update_data_never_polls_a_bluetooth_only_module(coordinator):
+    """An account of Bluetooth-only modules must still set up (#11).
+
+    Their state endpoint answers 503 by design, so polling them made every
+    cycle fail and the first refresh never succeeded.
+    """
+    coordinator.modules = {
+        "b1": _module(id="b1", type="bl-ip", raw={"isBluetoothOnly": True}),
+        "b2": _module(id="b2", type="bl-ip", raw={"isBluetoothOnly": True}),
+    }
+    coordinator.client.async_get_module_state = AsyncMock(
+        side_effect=SolemConnectionError("503")
+    )
+    assert await coordinator._async_update_data() == {}
+    coordinator.client.async_get_module_state.assert_not_awaited()
+
+
+async def test_update_data_still_fails_when_every_reachable_module_fails(coordinator):
+    """Skipping Bluetooth modules must not hide a real outage."""
+    coordinator.modules = {
+        "m1": _module(id="m1"),
+        "b1": _module(id="b1", type="bl-ip", raw={"isBluetoothOnly": True}),
+    }
+    coordinator.client.async_get_module_state = AsyncMock(
+        side_effect=SolemConnectionError("down")
+    )
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+    coordinator.client.async_get_module_state.assert_awaited_once_with("m1")
 
 
 async def test_update_data_total_failure_raises(coordinator):
@@ -707,6 +751,23 @@ async def test_standalone_meter_module_is_relevant(coordinator):
     coordinator.modules = {"lrfl": meter_module}
     coordinator.data = {"lrfl": {}}
     assert coordinator.relevant_module_ids() == {"lrfl"}
+
+
+async def test_setup_warns_about_bluetooth_only_modules(coordinator, caplog):
+    """A user must be told why a Bluetooth controller shows nothing."""
+    coordinator.client.async_login = AsyncMock(return_value="uid")
+    coordinator.client.async_get_module_ids = AsyncMock(return_value=["b1", "m1"])
+    objs = {
+        "b1": {"name": "Tennis", "type": "bl-ip", "isBluetoothOnly": True},
+        "m1": {"name": "Ctrl", "type": "lr-is", "isBluetoothOnly": False},
+    }
+    coordinator.client.async_get_module_page = AsyncMock(
+        side_effect=lambda mid: (objs[mid], [])
+    )
+    await coordinator.async_setup()
+    [warning] = [r.message for r in caplog.records if "over Bluetooth" in r.message]
+    assert "Tennis (bl-ip)" in warning
+    assert "Ctrl" not in warning
 
 
 async def test_setup_warns_when_declared_inputs_cannot_be_parsed(coordinator, caplog):
