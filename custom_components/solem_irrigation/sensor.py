@@ -9,7 +9,11 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfVolume, UnitOfVolumeFlowRate
+from homeassistant.const import (
+    UnitOfPrecipitationDepth,
+    UnitOfVolume,
+    UnitOfVolumeFlowRate,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -22,6 +26,7 @@ from .coordinator import (
     SolemFlowMeter,
     SolemFlowReading,
     SolemModule,
+    SolemRainGauge,
 )
 from .entity import SolemModuleEntity
 
@@ -50,6 +55,10 @@ async def async_setup_entry(
         for meter in module.flow_meters:
             entities.append(SolemWaterUsedSensor(coordinator, module, meter))
             entities.append(SolemWaterFlowRateSensor(coordinator, module, meter))
+        entities.extend(
+            SolemRainfallSensor(coordinator, module, gauge)
+            for gauge in module.rain_gauges
+        )
     async_add_entities(entities)
 
 
@@ -276,3 +285,51 @@ class SolemWaterFlowRateSensor(SolemFlowMeterEntity):
         """Return the current flow rate, or None when it cannot be determined."""
         reading = self._reading
         return reading.rate if reading else None
+
+
+class SolemRainfallSensor(SolemModuleEntity, SensorEntity):
+    """SOLEM's lifetime rainfall total, as counted by a tipping-bucket gauge.
+
+    A lifetime counter, like *water used*, so a restart never double-counts it;
+    daily or weekly totals are a ``utility_meter`` away.
+    """
+
+    _attr_translation_key = "rainfall"
+    _attr_device_class = SensorDeviceClass.PRECIPITATION
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    # SOLEM stores rainfall in millimetres and converts to inches for display.
+    _attr_native_unit_of_measurement = UnitOfPrecipitationDepth.MILLIMETERS
+    _attr_suggested_display_precision = 1
+
+    def __init__(
+        self,
+        coordinator: SolemDataUpdateCoordinator,
+        module: SolemModule,
+        gauge: SolemRainGauge,
+    ) -> None:
+        """Initialise the rainfall sensor for ``gauge``."""
+        super().__init__(coordinator, module)
+        self._gauge_id = gauge.id
+        self._attr_unique_id = f"{module.id}_rainfall_{gauge.id}"
+        # Named through a placeholder for the same reason as the flow meters.
+        self._attr_translation_placeholders = {"gauge": gauge.name}
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the rainfall total, or None until the first tick arrives."""
+        reading = self.coordinator.rain_reading(self._gauge_id)
+        return reading.total if reading else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object] | None:
+        """Expose the newest tick and SOLEM's own probe flag."""
+        reading = self.coordinator.rain_reading(self._gauge_id)
+        if reading is None:
+            return None
+        record = self.coordinator.input_record(self._gauge_id) or {}
+        return {
+            "gauge_id": self._gauge_id,
+            "raw_value": reading.raw_total,
+            "last_measurement": reading.timestamp.isoformat(),
+            "faulty_probe": record.get("hasFaultyProbe"),
+        }

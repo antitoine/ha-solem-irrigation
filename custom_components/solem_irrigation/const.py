@@ -70,6 +70,11 @@ STORAGE_KEY = f"{DOMAIN}.run_minutes"
 # A module's sensors are "inputs". SOLEM's own web app identifies a flow meter
 # by type (its bundle declares ``flowMeterSensors = [1]``).
 INPUT_TYPE_FLOW_METER = 1
+# A tipping-bucket rain gauge (``rainGaugeSensors = [14]`` in the same bundle):
+# a cumulative counter of bucket tips, scaled to millimetres by its expression
+# (``x*0.2794`` on an LR-MS). Not to be confused with type 2, the on/off rain
+# *sensor* the bundle lists separately.
+INPUT_TYPE_RAIN_GAUGE = 14
 
 # Reading unit, as reported by an input's ``unit`` field. SOLEM stores volumes
 # in whichever of these the meter was configured with and converts for display.

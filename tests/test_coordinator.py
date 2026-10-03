@@ -26,8 +26,10 @@ from custom_components.solem_irrigation.coordinator import (
     SolemFlowMeter,
     SolemModule,
     SolemProgram,
+    SolemRainGauge,
     SolemStation,
     _build_flow_meters,
+    _build_rain_gauges,
     _compute_flow_rate,
     _find_by_token,
 )
@@ -810,3 +812,101 @@ async def test_poll_flow_skips_a_meter_whose_value_cannot_be_scaled(coordinator)
     coordinator.modules["m1"].flow_meters = [_flow_meter(expression="2*x")]
     await coordinator._async_update_data()
     assert coordinator.flow_reading("i1") is None
+
+
+# -- rain gauges (#8) -----------------------------------------------------------
+
+# Trimmed from the LR-MS "Rain Sensor" of issue #8.
+RAIN_INPUT = {
+    "id": "r1",
+    "name": "",
+    "getName": "Pluvio Meter",
+    "type": 14,
+    "unit": 13,
+    "index": 1,
+    "expression": "x*0.2794",
+    "typeIsCumulativeData": True,
+    "highThreshold": 2,
+    "isLastMeasureBeyondThresholds": False,
+}
+
+
+def _rain_module(**kwargs) -> SolemModule:
+    base = dict(
+        id="ms",
+        type="lr-ms",
+        display_type="lr-ms",
+        raw={"typeIsWatering": False, "typeIsSensor": True},
+        stations=[],
+        programs=[],
+        rain_gauges=_build_rain_gauges([dict(RAIN_INPUT)]),
+    )
+    base.update(kwargs)
+    return _module(**base)
+
+
+def test_build_rain_gauges_keeps_only_type_14():
+    """Type 2 is the on/off rain *sensor*, a different thing."""
+    gauges = _build_rain_gauges(
+        [dict(RAIN_INPUT), {**RAIN_INPUT, "id": "r2", "type": 2}, dict(FLOW_INPUT)]
+    )
+    assert gauges == [
+        SolemRainGauge(
+            id="r1", name="Pluvio Meter", index=1, expression="x*0.2794", raw=RAIN_INPUT
+        )
+    ]
+
+
+def test_build_rain_gauges_skips_unscalable_expression(caplog):
+    assert _build_rain_gauges([{**RAIN_INPUT, "expression": "Math.pow(x,2)"}]) == []
+    assert "Ignoring SOLEM rain gauge r1" in caplog.text
+
+
+async def test_rain_gauge_module_is_relevant(coordinator):
+    """A standalone LR-MS is not a controller, yet it is ours."""
+    coordinator.modules = {"ms": _rain_module()}
+    coordinator.data = {"ms": {}}
+    assert coordinator.relevant_module_ids() == {"ms"}
+
+
+async def test_poll_scales_the_rain_total_and_keeps_the_live_flags(coordinator):
+    newest = dt_util.utcnow() - timedelta(minutes=3)
+    coordinator.modules = {"ms": _rain_module()}
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = AsyncMock(
+        return_value=[
+            {
+                **RAIN_INPUT,
+                "isLastMeasureBeyondThresholds": True,
+                "computedSensorData": [],
+            }
+        ]
+    )
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        return_value={"value": 100, "timestamp": newest.isoformat()}
+    )
+
+    await coordinator._async_update_data()
+
+    reading = coordinator.rain_reading("r1")
+    assert reading.total == 27.94  # 100 tips x 0.2794 mm
+    assert reading.raw_total == 100
+    assert reading.timestamp == newest
+    # The window carries the flag even with no ticks in it.
+    assert coordinator.input_record("r1")["isLastMeasureBeyondThresholds"] is True
+
+
+async def test_poll_keeps_the_previous_rain_total_when_the_tick_fails(coordinator):
+    coordinator.modules = {"ms": _rain_module()}
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = AsyncMock(return_value=[])
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        return_value={"value": 100, "timestamp": dt_util.utcnow().isoformat()}
+    )
+    await coordinator._async_update_data()
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        side_effect=SolemConnectionError("offline")
+    )
+    await coordinator._async_update_data()
+    assert coordinator.rain_reading("r1").total == 27.94
+    assert coordinator.input_record("r1") is None  # never returned by a window

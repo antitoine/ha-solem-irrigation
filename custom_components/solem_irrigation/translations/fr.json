@@ -29,6 +29,11 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "rain_threshold": {
+        "name": "Seuil de pluie {gauge}"
+      }
+    },
     "switch": {
       "enabled": {
         "name": "Arrosage activé"
@@ -67,6 +72,9 @@
       },
       "water_flow_rate": {
         "name": "Débit {meter}"
+      },
+      "rainfall": {
+        "name": "Pluviométrie {gauge}"
       }
     }
   },

@@ -280,6 +280,71 @@ async def test_unlinkable_relay_leaves_no_via_device(
     assert device.via_device_id is None
 
 
+async def test_rain_gauge_entities_are_accepted_by_home_assistant(
+    hass: HomeAssistant, entry
+) -> None:
+    """A standalone LR-MS rain gauge (#8) gets a device and both entities."""
+    rain_sensor = {
+        "name": "Rain Sensor",
+        "serialNumber": "SERMS",
+        "type": "lr-ms",
+        "typeIsWatering": False,
+        "typeIsSensor": True,
+    }
+    gauge = {
+        "id": "r1",
+        "name": "",
+        "getName": "Pluvio Meter",
+        "type": 14,
+        "unit": 13,
+        "index": 1,
+        "expression": "x*0.2794",
+        "highThreshold": 2,
+        "isLastMeasureBeyondThresholds": False,
+        "actionWhenHighDailyThresholdExceeded": 6,
+    }
+    pages = {"ms": (rain_sensor, [gauge]), "g1": (GATEWAY, [])}
+    states = {"ms": {"relay": "g1"}, "g1": {}}
+    newest = dt_util.utcnow() - timedelta(minutes=3)
+
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["ms", "g1"])),
+        patch(_GET, AsyncMock(side_effect=lambda module_id: pages[module_id])),
+        patch(_STATE, AsyncMock(side_effect=lambda module_id: states[module_id])),
+        patch(_FIELDS, AsyncMock(return_value={})),
+        patch(
+            _SENSOR_DATA,
+            AsyncMock(return_value=[{**gauge, "isLastMeasureBeyondThresholds": True}]),
+        ),
+        patch(
+            _TICK,
+            AsyncMock(return_value={"value": 100, "timestamp": newest.isoformat()}),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    rainfall = hass.states.get("sensor.rain_sensor_pluvio_meter_rainfall")
+    assert rainfall is not None, [s.entity_id for s in hass.states.async_all()]
+    assert rainfall.state == "27.94"
+    assert rainfall.attributes["device_class"] == "precipitation"
+    assert rainfall.attributes["state_class"] == "total_increasing"
+    assert rainfall.attributes["unit_of_measurement"] == "mm"
+
+    threshold = hass.states.get("binary_sensor.rain_sensor_pluvio_meter_rain_threshold")
+    assert threshold is not None
+    assert threshold.state == "on"
+    assert threshold.attributes["daily_threshold"] == 2
+
+    registry = dr.async_get(hass)
+    rain_device = registry.async_get_device_by_identifier(
+        (DOMAIN, "ms"), entry.entry_id
+    )
+    gateway = registry.async_get_device_by_identifier((DOMAIN, "g1"), entry.entry_id)
+    assert rain_device.via_device_id == gateway.id
+
+
 async def test_an_account_of_bluetooth_only_controllers_loads(
     hass: HomeAssistant, entry
 ) -> None:

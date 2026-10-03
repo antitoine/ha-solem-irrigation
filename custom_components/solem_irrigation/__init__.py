@@ -11,6 +11,7 @@ from .const import DOMAIN, MANUFACTURER
 from .coordinator import SolemConfigEntry, SolemDataUpdateCoordinator
 
 PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
     Platform.SWITCH,
     Platform.VALVE,
     Platform.SELECT,

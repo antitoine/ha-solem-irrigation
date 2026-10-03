@@ -37,6 +37,7 @@ from .const import (
     FLOW_IDLE_AFTER,
     FLOW_WINDOW,
     INPUT_TYPE_FLOW_METER,
+    INPUT_TYPE_RAIN_GAUGE,
     LIVE_MODULE_FIELDS,
     REGION_EUROPE,
     STORAGE_KEY,
@@ -100,36 +101,89 @@ class SolemFlowReading:
     record: dict[str, Any]
 
 
-def _build_flow_meters(inputs: list[dict[str, Any]]) -> list[SolemFlowMeter]:
-    """Pick the flow meters out of a module's inputs, in index order."""
-    meters: list[SolemFlowMeter] = []
+@dataclass(slots=True)
+class SolemRainGauge:
+    """A tipping-bucket rain gauge (an input, like a flow meter)."""
+
+    id: str
+    name: str
+    index: int
+    expression: str
+    raw: dict[str, Any]
+
+
+@dataclass(slots=True)
+class SolemRainReading:
+    """The latest reading of a rain gauge: SOLEM's lifetime total, in mm."""
+
+    total: float
+    raw_total: float
+    timestamp: datetime
+
+
+def _scalable_inputs(
+    inputs: list[dict[str, Any]], input_type: int, kind: str
+) -> list[dict[str, Any]]:
+    """Return a module's inputs of ``input_type``, in index order.
+
+    Inputs whose scaling expression is not understood are dropped: both kinds
+    modelled today are cumulative, and a mis-scaled cumulative value would
+    poison long-term statistics, which a user cannot easily purge.
+    """
+    records: list[dict[str, Any]] = []
     for record in sorted(inputs, key=lambda r: int(r.get("index", 0) or 0)):
-        if record.get("type") != INPUT_TYPE_FLOW_METER:
+        if record.get("type") != input_type:
             continue
         expression = record.get("expression") or ""
         if apply_expression(expression, 1.0) is None:
-            # Publishing a mis-scaled cumulative value would poison long-term
-            # statistics, which a user cannot easily purge. Skip it instead.
             _LOGGER.warning(
-                "Ignoring SOLEM flow meter %s: unsupported scaling expression %r",
+                "Ignoring SOLEM %s %s: unsupported scaling expression %r",
+                kind,
                 record["id"],
                 expression,
             )
             continue
-        meters.append(
-            SolemFlowMeter(
-                id=record["id"],
-                name=record.get("name")
-                or record.get("getName")
-                or f"Flow meter {record.get('index', '?')}",
-                index=int(record.get("index", 0) or 0),
-                unit=int(record.get("unit", 0) or 0),
-                expression=expression,
-                interval=int(record.get("interval", 0) or 0) or DEFAULT_INPUT_INTERVAL,
-                raw=record,
-            )
+        records.append(record)
+    return records
+
+
+def _input_name(record: dict[str, Any], fallback: str) -> str:
+    """The user's label, else SOLEM's localised one, else a generic name."""
+    return (
+        record.get("name")
+        or record.get("getName")
+        or f"{fallback} {record.get('index', '?')}"
+    )
+
+
+def _build_flow_meters(inputs: list[dict[str, Any]]) -> list[SolemFlowMeter]:
+    """Pick the flow meters out of a module's inputs, in index order."""
+    return [
+        SolemFlowMeter(
+            id=record["id"],
+            name=_input_name(record, "Flow meter"),
+            index=int(record.get("index", 0) or 0),
+            unit=int(record.get("unit", 0) or 0),
+            expression=record.get("expression") or "",
+            interval=int(record.get("interval", 0) or 0) or DEFAULT_INPUT_INTERVAL,
+            raw=record,
         )
-    return meters
+        for record in _scalable_inputs(inputs, INPUT_TYPE_FLOW_METER, "flow meter")
+    ]
+
+
+def _build_rain_gauges(inputs: list[dict[str, Any]]) -> list[SolemRainGauge]:
+    """Pick the rain gauges out of a module's inputs, in index order."""
+    return [
+        SolemRainGauge(
+            id=record["id"],
+            name=_input_name(record, "Rain gauge"),
+            index=int(record.get("index", 0) or 0),
+            expression=record.get("expression") or "",
+            raw=record,
+        )
+        for record in _scalable_inputs(inputs, INPUT_TYPE_RAIN_GAUGE, "rain gauge")
+    ]
 
 
 def _usable_ticks(record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -215,10 +269,11 @@ class SolemModule:
     stations: list[SolemStation] = field(default_factory=list)
     programs: list[SolemProgram] = field(default_factory=list)
     flow_meters: list[SolemFlowMeter] = field(default_factory=list)
+    rain_gauges: list[SolemRainGauge] = field(default_factory=list)
     # Every input as the cloud returned it, including the ones
-    # ``_build_flow_meters`` drops. Nothing reads this at runtime; it exists so
-    # diagnostics can show a sensor the integration does not model yet (a rain
-    # gauge, a soil-moisture probe), which is otherwise invisible -- ``raw`` is
+    # ``_build_*`` helpers drop. Nothing reads this at runtime; it exists so
+    # diagnostics can show a sensor the integration does not model yet (a
+    # soil-moisture probe, a turbine), which is otherwise invisible -- ``raw`` is
     # the ``let module`` object and does not carry the inputs.
     raw_inputs: list[dict[str, Any]] = field(default_factory=list)
 
@@ -286,6 +341,12 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         # here rather than in ``data`` because it comes from its own endpoints,
         # not from the module state poll -- same reasoning as ``run_minutes``.
         self.flow: dict[str, SolemFlowReading] = {}
+        # Latest rain-gauge reading, keyed by **gauge (input) id**.
+        self.rain: dict[str, SolemRainReading] = {}
+        # Each modelled input's record as the sensor-data window last returned
+        # it, keyed by **input id**. It carries SOLEM's live flags (threshold
+        # exceeded, faulty probe), which the module page only snapshots at setup.
+        self.input_records: dict[str, dict[str, Any]] = {}
         self._store: Store[dict[str, int]] = Store(
             hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry.entry_id}"
         )
@@ -392,16 +453,17 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                         if p.get("id")
                     ],
                     flow_meters=_build_flow_meters(inputs),
+                    rain_gauges=_build_rain_gauges(inputs),
                     raw_inputs=inputs,
                 )
                 modules[module_id] = module
                 # ``input_types`` is what makes a sensor this integration does
-                # not model yet (a rain gauge, a soil probe) visible to a user
-                # who can only send a log line rather than a diagnostics file.
+                # not model yet (a soil probe, a turbine) visible to a user who
+                # can only send a log line rather than a diagnostics file.
                 _LOGGER.debug(
                     "Discovered module %s: name=%s type=%s outputs=%d "
                     "programs=%d inputs=%d input_types=%s flow_meters=%d "
-                    "controller=%s",
+                    "rain_gauges=%d controller=%s",
                     module_id,
                     module.name,
                     module.type,
@@ -416,6 +478,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                         }
                     ),
                     len(module.flow_meters),
+                    len(module.rain_gauges),
                     module.is_controller,
                 )
             self.modules = modules
@@ -471,11 +534,12 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         # account; a failure just leaves the previous values in place.
         await self._async_refresh_module_fields()
 
-        # Flow meters live on their own endpoints. A failure here never fails
-        # the cycle: the watering state above stays the sole authority.
+        # Sensors live on their own endpoints. A failure here never fails the
+        # cycle: the watering state above stays the sole authority.
         for module_id in self.relevant_module_ids():
-            if self.modules[module_id].flow_meters:
-                await self._async_poll_flow(module_id)
+            module = self.modules[module_id]
+            if module.flow_meters or module.rain_gauges:
+                await self._async_poll_inputs(module_id)
         return states
 
     async def _async_refresh_module_fields(self) -> None:
@@ -503,13 +567,14 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                     {k: v for k, v in record.items() if k in LIVE_MODULE_FIELDS}
                 )
 
-    async def _async_poll_flow(self, module_id: str) -> None:
-        """Refresh every flow-meter reading on a module.
+    async def _async_poll_inputs(self, module_id: str) -> None:
+        """Refresh every flow-meter and rain-gauge reading on a module.
 
-        The cumulative total comes from each meter's newest tick (which the cloud
-        always answers with, however old it is) while the rate is derived from a
-        short window of ticks. On failure the previous reading is kept: blanking
-        a cumulative water sensor punches a hole in long-term statistics.
+        Each cumulative total comes from the input's newest tick (which the
+        cloud always answers with, however old it is), while a flow rate is
+        derived from a short window of ticks. On failure the previous reading is
+        kept: blanking a cumulative sensor punches a hole in long-term
+        statistics.
         """
         module = self.modules[module_id]
         now = dt_util.utcnow()
@@ -522,41 +587,70 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         except SolemAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except SolemConnectionError as err:
-            _LOGGER.debug("Flow window fetch failed for %s: %s", module_id, err)
+            _LOGGER.debug("Sensor window fetch failed for %s: %s", module_id, err)
             records = []
         by_id = {r["id"]: r for r in records if r.get("id")}
+        # The window returns every input's record even when it holds no ticks,
+        # so it is also where the live flags come from.
+        self.input_records.update(by_id)
 
         for meter in module.flow_meters:
-            try:
-                tick = await self.client.async_get_last_input_tick(meter.id)
-            except SolemAuthError as err:
-                raise ConfigEntryAuthFailed(str(err)) from err
-            except SolemConnectionError as err:
-                _LOGGER.debug("Tick fetch failed for meter %s: %s", meter.id, err)
+            if (
+                tick := await self._async_last_tick(meter.id, meter.expression)
+            ) is None:
                 continue
-
-            raw_value = tick.get("value")
-            timestamp = dt_util.parse_datetime(tick.get("timestamp") or "")
-            if raw_value is None or timestamp is None:
-                # A meter that has never reported: leave it unknown rather than
-                # inventing a zero that would land in long-term statistics.
-                continue
-            volume = apply_expression(meter.expression, float(raw_value))
-            if volume is None:
-                continue
-
+            volume, raw_volume, timestamp = tick
             record = by_id.get(meter.id, {})
             self.flow[meter.id] = SolemFlowReading(
                 volume=volume,
-                raw_volume=float(raw_value),
-                timestamp=dt_util.as_utc(timestamp),
+                raw_volume=raw_volume,
+                timestamp=timestamp,
                 rate=_compute_flow_rate(record, now, meter.interval),
                 record=record or meter.raw,
             )
 
+        for gauge in module.rain_gauges:
+            if (
+                tick := await self._async_last_tick(gauge.id, gauge.expression)
+            ) is None:
+                continue
+            self.rain[gauge.id] = SolemRainReading(*tick)
+
+    async def _async_last_tick(
+        self, input_id: str, expression: str
+    ) -> tuple[float, float, datetime] | None:
+        """Return an input's newest tick as ``(scaled, raw, timestamp)``.
+
+        None when the fetch failed, when the sensor has never reported, or when
+        its value cannot be scaled -- the caller then keeps its previous reading
+        rather than inventing a zero that would land in long-term statistics.
+        """
+        try:
+            tick = await self.client.async_get_last_input_tick(input_id)
+        except SolemAuthError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+        except SolemConnectionError as err:
+            _LOGGER.debug("Tick fetch failed for input %s: %s", input_id, err)
+            return None
+        raw_value = tick.get("value")
+        timestamp = dt_util.parse_datetime(tick.get("timestamp") or "")
+        if raw_value is None or timestamp is None:
+            return None
+        if (scaled := apply_expression(expression, float(raw_value))) is None:
+            return None
+        return scaled, float(raw_value), dt_util.as_utc(timestamp)
+
     def flow_reading(self, meter_id: str) -> SolemFlowReading | None:
         """Return the latest reading for a flow meter, if one has arrived."""
         return self.flow.get(meter_id)
+
+    def rain_reading(self, gauge_id: str) -> SolemRainReading | None:
+        """Return the latest reading for a rain gauge, if one has arrived."""
+        return self.rain.get(gauge_id)
+
+    def input_record(self, input_id: str) -> dict[str, Any] | None:
+        """Return an input's record as last polled, if it has been."""
+        return self.input_records.get(input_id)
 
     # -- helpers used by entities ------------------------------------------
 
@@ -567,14 +661,16 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         out of Home Assistant.
 
         A watering module carrying a flow meter is already a controller. SOLEM
-        also sells the meter as a module of its own (lr-fl and friends), which is
-        not a watering type, so those are admitted on the strength of their
-        meters -- untested, as I only have the controller-attached topology.
+        also sells sensors as modules of their own, which are not a watering
+        type, so those are admitted on the strength of what they measure: a flow
+        meter (lr-fl and friends -- untested, as I only have the
+        controller-attached topology) or a rain gauge (the LR-MS, #8).
         """
         ids = {
             m.id
             for m in self.modules.values()
-            if m.is_controller or (m.flow_meters and not m.raw.get("typeIsPoolProduct"))
+            if m.is_controller
+            or ((m.flow_meters or m.rain_gauges) and not m.raw.get("typeIsPoolProduct"))
         }
         for module_id in list(ids):
             relay = self.module_state(module_id).get("relay")

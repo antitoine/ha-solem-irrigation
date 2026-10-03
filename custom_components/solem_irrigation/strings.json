@@ -29,6 +29,11 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "rain_threshold": {
+        "name": "{gauge} rain threshold"
+      }
+    },
     "switch": {
       "enabled": {
         "name": "Irrigation enabled"
@@ -67,6 +72,9 @@
       },
       "water_flow_rate": {
         "name": "{meter} flow rate"
+      },
+      "rainfall": {
+        "name": "{gauge} rainfall"
       }
     }
   },

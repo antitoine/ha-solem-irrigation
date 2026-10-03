@@ -4,7 +4,11 @@ from unittest.mock import MagicMock
 
 import pytest
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
-from homeassistant.const import UnitOfVolume, UnitOfVolumeFlowRate
+from homeassistant.const import (
+    UnitOfPrecipitationDepth,
+    UnitOfVolume,
+    UnitOfVolumeFlowRate,
+)
 from homeassistant.util import dt as dt_util
 
 from custom_components.solem_irrigation.coordinator import (
@@ -12,11 +16,14 @@ from custom_components.solem_irrigation.coordinator import (
     SolemFlowMeter,
     SolemFlowReading,
     SolemModule,
+    SolemRainGauge,
+    SolemRainReading,
     SolemStation,
 )
 from custom_components.solem_irrigation.sensor import (
     SolemBatterySensor,
     SolemLastCommunicationSensor,
+    SolemRainfallSensor,
     SolemRunningStationSensor,
     SolemWaterFlowRateSensor,
     SolemWaterUsedSensor,
@@ -371,3 +378,52 @@ async def test_async_setup_entry_adds_flow_meter_sensors(coordinator, module):
         "m1_water_flow_rate_i1",
         "m1_water_used_i1",
     ]
+
+
+# -- rain gauge ---------------------------------------------------------------
+
+GAUGE = SolemRainGauge(
+    id="r1", name="Pluvio Meter", index=1, expression="x*0.2794", raw={"id": "r1"}
+)
+
+
+def test_rainfall_value_and_metadata(coordinator, module):
+    coordinator.rain_reading.return_value = SolemRainReading(
+        total=27.94,
+        raw_total=100,
+        timestamp=dt_util.parse_datetime("2026-09-30T14:00:00+00:00"),
+    )
+    coordinator.input_record.return_value = {"hasFaultyProbe": False}
+    sensor = SolemRainfallSensor(coordinator, module, GAUGE)
+
+    assert sensor.unique_id == "m1_rainfall_r1"
+    assert sensor.native_value == 27.94
+    assert sensor.device_class == SensorDeviceClass.PRECIPITATION
+    assert sensor.state_class == SensorStateClass.TOTAL_INCREASING
+    assert sensor.native_unit_of_measurement == UnitOfPrecipitationDepth.MILLIMETERS
+    assert sensor.translation_placeholders == {"gauge": "Pluvio Meter"}
+    assert sensor.extra_state_attributes == {
+        "gauge_id": "r1",
+        "raw_value": 100,
+        "last_measurement": "2026-09-30T14:00:00+00:00",
+        "faulty_probe": False,
+    }
+
+
+def test_rainfall_unknown_before_the_first_tick(coordinator, module):
+    coordinator.rain_reading.return_value = None
+    sensor = SolemRainfallSensor(coordinator, module, GAUGE)
+    assert sensor.native_value is None
+    assert sensor.extra_state_attributes is None
+
+
+async def test_async_setup_entry_adds_rainfall_sensor(coordinator, module):
+    module.rain_gauges = [GAUGE]
+    coordinator.relevant_module_ids.return_value = {"m1"}
+    entry = MagicMock()
+    entry.runtime_data = coordinator
+    added: list = []
+
+    await async_setup_entry(MagicMock(), entry, added.extend)
+
+    assert "m1_rainfall_r1" in {s.unique_id for s in added}

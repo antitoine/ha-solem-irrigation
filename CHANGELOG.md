@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Rain gauge support.** A SOLEM tipping-bucket rain gauge (pluviomètre — e.g.
+  the one on an LR-MS sensor module) now gets its own device, with a
+  *&lt;gauge&gt; rainfall* sensor — SOLEM's lifetime total in mm, ready for
+  long-term statistics and a `utility_meter` — and a *&lt;gauge&gt; rain
+  threshold* binary sensor carrying SOLEM's own "beyond thresholds" flag as-is,
+  with the threshold set in MySOLEM as an attribute. Identified by SOLEM's own input type (14), as
+  listed in its web app; the scaling is the per-gauge expression SOLEM ships.
+  ([#8](https://github.com/antitoine/ha-solem-irrigation/issues/8))
+
 ## [0.8.1] - 2026-10-04
 
 ### Fixed

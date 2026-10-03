@@ -50,6 +50,14 @@ your account:
 | **Sensor** *&lt;meter&gt; water used* | SOLEM's lifetime water counter, for controllers with a flow meter (débitmètre). Add it to the Home Assistant **Water** dashboard. |
 | **Sensor** *&lt;meter&gt; flow rate* | How fast water is flowing right now — non-zero outside a watering run means a leak. |
 
+A SOLEM **rain gauge** (pluviomètre, e.g. on an LR-MS sensor module) gets its
+own device with:
+
+| Entity | What it does |
+| --- | --- |
+| **Sensor** *&lt;gauge&gt; rainfall* | SOLEM's lifetime rainfall total, in mm. For rain per day or week, point a [`utility_meter`](https://www.home-assistant.io/integrations/utility_meter/) at it. |
+| **Binary sensor** *&lt;gauge&gt; rain threshold* | SOLEM's own "beyond thresholds" flag for the gauge, shown as-is — on when SOLEM considers the rainfall threshold set in MySOLEM crossed. The threshold and SOLEM's configured action are attributes. |
+
 ### Actions (services)
 
 | Action | What it does |
@@ -124,6 +132,10 @@ pool integration, not this one.)
   meter only records a reading while water actually flows, so *flow rate* is
   derived from the last minutes of readings; it reads `0` when idle and can be
   briefly unknown in the first minute of a run.
+- The *rain threshold* binary sensor is SOLEM's own flag, shown as-is and not
+  re-derived: SOLEM documents neither when it clears nor exactly what it is
+  compared against. It says nothing about what your controllers did — that
+  action is a MySOLEM setting.
 
 ## Reporting a problem
 
