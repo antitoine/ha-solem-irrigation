@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0b1] - 2026-10-04
+
+First beta of 0.9.0. It is aimed at the people who reported
+[#8](https://github.com/antitoine/ha-solem-irrigation/issues/8) and
+[#12](https://github.com/antitoine/ha-solem-irrigation/issues/12): the rain
+gauge is built from a real LR-MS payload but has never run against one, and the
+new diagnostics readings are what the LR-IP-ECO's turbine flow meter is waiting
+on. To install it, enable **Show beta versions** in HACS.
+
 ### Added
 
 - **Rain gauge support.** A SOLEM tipping-bucket rain gauge (pluviomètre — e.g.
@@ -314,7 +323,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0b1...HEAD
+[0.9.0b1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.1...v0.9.0b1
 [0.8.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.6.0...v0.7.0
