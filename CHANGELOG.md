@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-04
+
+### Fixed
+
+- **An account holding only Bluetooth controllers (BL-IP …) no longer fails
+  to set up.** MySOLEM has no live link to a Bluetooth-only module, so its state
+  endpoint answers `503` on every request — by design, and SOLEM's own web app
+  never asks it. The integration polled it anyway, and with no other module to
+  succeed, every cycle failed and setup retried forever. Bluetooth-only modules
+  (SOLEM's `isBluetoothOnly` flag, or a `bl-*` type) are no longer polled, and
+  a warning at startup names them. A real cloud outage still fails the cycle
+  as before.
+
+  On an account that mixes Bluetooth-only controllers with LoRa or WiFi ones,
+  nothing visible changes beyond that warning: those modules were already
+  failing every poll, just silently. Their entities are still created, but
+  since MySOLEM cannot see these controllers, they cannot reflect what the
+  controllers are doing.
+  ([#11](https://github.com/antitoine/ha-solem-irrigation/issues/11))
+
 ## [0.8.0] - 2026-09-23
 
 ### Added
@@ -269,7 +289,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.5.0...v0.6.0
