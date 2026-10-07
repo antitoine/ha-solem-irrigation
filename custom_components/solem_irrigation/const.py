@@ -35,6 +35,14 @@ MAX_RUN_MINUTES = 12 * 60  # the controller takes hours + minutes (max 12h)
 # Rain-delay (a.k.a. "off for N days"); 0 days == enabled.
 MAX_RAIN_DELAY_DAYS = 30
 
+# On/off as the live state reports it, in ``status.watering``. SOLEM's web app
+# reads ``state`` 0 (or the string "OFF") as off, and ``rainDelay`` as the days
+# left before it turns back on by itself; anything else in ``state`` is on.
+# ``rainDelay`` 255 is how the web app spells a permanent OFF on another family
+# of modules, so it is read as permanent here too rather than as 255 days.
+WATERING_STATES_OFF = (0, "OFF")
+RAIN_DELAY_PERMANENT = 255
+
 # Command vocabulary for POST /module/sendManualModuleCommand
 CMD_STOP = "manualStop"
 CMD_STATION = "station"

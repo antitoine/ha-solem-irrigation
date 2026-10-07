@@ -37,6 +37,9 @@ def coordinator(module) -> MagicMock:
     coord = MagicMock(spec=SolemDataUpdateCoordinator)
     coord.modules = {module.id: module}
     coord.client = AsyncMock()
+    coord.async_command_set_status = AsyncMock()
+    # No status in the live state: the number falls back to its assumed value.
+    coord.rain_delay_days.return_value = None
     return coord
 
 
@@ -62,10 +65,11 @@ async def test_rain_delay_disables_for_days(hass, coordinator, module):
 
     await number.async_set_native_value(3)
 
-    coordinator.client.async_set_status.assert_awaited_once_with(
-        "SER1", enabled=False, days=3
+    coordinator.async_command_set_status.assert_awaited_once_with(
+        module, enabled=False, days=3
     )
     assert number.native_value == 3.0
+    assert number.assumed_state is True
 
 
 async def test_rain_delay_zero_re_enables(hass, coordinator, module):
@@ -76,10 +80,19 @@ async def test_rain_delay_zero_re_enables(hass, coordinator, module):
 
     await number.async_set_native_value(0)
 
-    coordinator.client.async_set_status.assert_awaited_once_with(
-        "SER1", enabled=True, days=0
+    coordinator.async_command_set_status.assert_awaited_once_with(
+        module, enabled=True, days=0
     )
     assert number.native_value == 0.0
+
+
+def test_rain_delay_follows_the_reported_days(coordinator, module):
+    """The cloud's days left win, whoever set the delay."""
+    number = SolemRainDelayNumber(coordinator, module)
+    number._value = 5.0
+    coordinator.rain_delay_days.return_value = 1
+    assert number.native_value == 1.0
+    assert number.assumed_state is False
 
 
 async def test_async_setup_entry_rain_delay_plus_per_station(coordinator, module):

@@ -190,6 +190,40 @@ async def test_apply_optimistic_running_station(coordinator):
     assert coordinator.running_station_index("m1") == 2
 
 
+def _watering(**fields) -> dict:
+    return {"m1": {"status": {"watering": fields}}}
+
+
+@pytest.mark.parametrize(
+    ("watering", "enabled", "days"),
+    [
+        # As SOLEM's web app reads it: "OFF 1 jour" (the #8 payload).
+        ({"state": 0, "rainDelay": 1}, False, 1),
+        ({"state": "OFF", "rainDelay": 3}, False, 3),
+        # OFF with no day count, or the 255 the web app treats as permanent.
+        ({"state": 0, "rainDelay": 0}, False, 0),
+        ({"state": 0, "rainDelay": 255}, False, 0),
+        ({"state": 0}, False, 0),
+        ({"state": 0, "rainDelay": "x"}, False, 0),
+        # ``state`` reads 1 both idle and while a station runs.
+        ({"state": 1, "rainDelay": 0, "runningStation": 2}, True, 0),
+        # A stray delay on an ON controller is not a delay.
+        ({"state": 1, "rainDelay": 4}, True, 0),
+    ],
+)
+async def test_reported_watering_status(coordinator, watering, enabled, days):
+    coordinator.data = _watering(**watering)
+    assert coordinator.watering_enabled("m1") is enabled
+    assert coordinator.rain_delay_days("m1") == days
+
+
+async def test_watering_status_unknown_without_a_reported_state(coordinator):
+    coordinator.data = _watering(runningStation=0, rainDelay=2)
+    assert coordinator.watering_enabled("m1") is None
+    assert coordinator.rain_delay_days("m1") is None
+    assert coordinator.watering_enabled("unknown") is None
+
+
 async def test_relevant_module_ids_includes_controllers_and_gateway(coordinator):
     controller = _module(id="m1")
     gateway = _module(id="g1", raw={}, stations=[])
@@ -495,6 +529,38 @@ async def test_command_run_station(coordinator):
     await coordinator.async_command_run_station(module, station, 7)
     coordinator.client.async_run_station.assert_awaited_once_with("SER1", "s1", 7)
     assert coordinator.running_station_index("m1") == station.index
+    coordinator.async_schedule_refresh.assert_called_once()
+
+
+async def test_command_set_status_is_reflected_optimistically(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.data = _watering(state=1, rainDelay=0, runningStation=0)
+    coordinator.client.async_set_status = AsyncMock()
+    coordinator.async_schedule_refresh = MagicMock()
+
+    await coordinator.async_command_set_status(module, enabled=False, days=2)
+    coordinator.client.async_set_status.assert_awaited_once_with(
+        "SER1", enabled=False, days=2
+    )
+    assert coordinator.watering_enabled("m1") is False
+    assert coordinator.rain_delay_days("m1") == 2
+    coordinator.async_schedule_refresh.assert_called_once()
+
+    await coordinator.async_command_set_status(module, enabled=True)
+    assert coordinator.watering_enabled("m1") is True
+    assert coordinator.rain_delay_days("m1") == 0
+
+
+async def test_command_set_status_invents_no_status(coordinator):
+    """A controller that never reports a status must not appear to."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.data = {}
+    coordinator.client.async_set_status = AsyncMock()
+    coordinator.async_schedule_refresh = MagicMock()
+    await coordinator.async_command_set_status(module, enabled=False)
+    assert coordinator.watering_enabled("m1") is None
     coordinator.async_schedule_refresh.assert_called_once()
 
 

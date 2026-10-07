@@ -42,8 +42,8 @@ your account:
 | **Number** *Run duration* per station | How long opening that station's valve runs it (minutes). Each station keeps its own. Shown under *Configuration*. |
 | **Select** *Run program* | Pick a stored program to start it now. |
 | **Button** *Stop watering* | Stop anything running — a manual station run or a program. |
-| **Switch** *Irrigation enabled* | Turn the controller on, or off permanently (assumed state). |
-| **Number** *Rain delay* | Disable for N days (0 = enabled) — SOLEM's "Report de pluie". |
+| **Switch** *Irrigation enabled* | Turn the controller on, or off permanently. Also shows an OFF set from MySOLEM or by a rain gauge. |
+| **Number** *Rain delay* | Disable for N days (0 = enabled) — SOLEM's "Report de pluie". Shows the days left, whoever set the delay. |
 | **Sensor** *Watering station* | Name of the station currently watering (idle = none). |
 | **Sensor** *Last communication* | When the module last talked to the cloud — the LoRa radio contact for modules behind a gateway, the module's own connection for the gateway and for WiFi controllers. |
 | **Sensor** *Battery* | Battery indicator (battery-powered modules). |
@@ -125,10 +125,12 @@ pool integration, not this one.)
   naming them. For these, a Bluetooth integration such as
   [Solem Toolkit](https://github.com/hcraveiro/Home-Assistant-Solem-Toolkit) is
   the realistic route.
-- The *Irrigation enabled* switch and the *Rain delay* number are **assumed
-  state** (the cloud exposes no reliable read-back); their values are restored
-  across restarts. They both drive the controller's on/off, so they can show
-  slightly out of sync with each other.
+- The *Irrigation enabled* switch and the *Rain delay* number follow the
+  ON/OFF status the controller reports, so an OFF set from MySOLEM — by hand,
+  or by a rain gauge crossing its threshold — shows up in Home Assistant too.
+  On a controller whose state carries no such status they fall back to an
+  **assumed state**: the last value set from Home Assistant, restored across
+  restarts.
 - A **flow meter** is a sensor wired to the controller, not a device of its own,
   so its entities live on the controller. *Water used* is SOLEM's own lifetime
   counter, which means restarting Home Assistant never double-counts it. The

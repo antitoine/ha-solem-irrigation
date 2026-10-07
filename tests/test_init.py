@@ -408,6 +408,36 @@ async def test_a_bluetooth_only_controller_leftover_is_removed(
     assert entities.async_get_entity_id("switch", DOMAIN, "m1_enabled") is not None
 
 
+async def test_the_enable_switch_shows_an_off_set_outside_home_assistant(
+    hass: HomeAssistant, entry
+) -> None:
+    """What the #8 reporter saw: a rain gauge set every controller OFF 1 day."""
+    off = {
+        "status": {"watering": {"state": 0, "rainDelay": 1, "runningStation": 0}},
+        "relay": "g1",
+    }
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["m1"])),
+        patch(_GET, AsyncMock(return_value=(CONTROLLER, []))),
+        patch(_STATE, AsyncMock(return_value=off)),
+        patch(_FIELDS, AsyncMock(return_value={})),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entities = er.async_get(hass)
+    switch = hass.states.get(
+        entities.async_get_entity_id("switch", DOMAIN, "m1_enabled")
+    )
+    rain_delay = hass.states.get(
+        entities.async_get_entity_id("number", DOMAIN, "m1_rain_delay")
+    )
+    assert switch.state == "off"
+    assert "assumed_state" not in switch.attributes
+    assert rain_delay.state == "1.0"
+
+
 async def test_only_a_device_that_left_the_account_can_be_removed(
     hass: HomeAssistant, entry
 ) -> None:

@@ -40,6 +40,9 @@ def coordinator(module) -> MagicMock:
     coord = MagicMock(spec=SolemDataUpdateCoordinator)
     coord.modules = {module.id: module}
     coord.client = AsyncMock()
+    coord.async_command_set_status = AsyncMock()
+    # No status in the live state: the switch falls back to its assumed value.
+    coord.watering_enabled.return_value = None
     return coord
 
 
@@ -54,14 +57,26 @@ def _switch(coordinator, module, hass):
 def test_defaults_on(coordinator, module):
     switch = SolemEnableSwitch(coordinator, module)
     assert switch.is_on is True
+    assert switch.assumed_state is True
     assert switch.unique_id == "m1_enabled"
+
+
+def test_follows_the_reported_status(coordinator, module):
+    """An OFF set from MySOLEM (or by a rain gauge) must show up in HA (#8)."""
+    switch = SolemEnableSwitch(coordinator, module)
+    coordinator.watering_enabled.return_value = False
+    assert switch.is_on is False
+    assert switch.assumed_state is False
+    coordinator.watering_enabled.return_value = True
+    switch._is_on = False  # a stale assumed value never wins over the cloud
+    assert switch.is_on is True
 
 
 async def test_turn_off_disables_permanently(hass, coordinator, module):
     switch = _switch(coordinator, module, hass)
     await switch.async_turn_off()
-    coordinator.client.async_set_status.assert_awaited_once_with(
-        "SER1", enabled=False, days=0
+    coordinator.async_command_set_status.assert_awaited_once_with(
+        module, enabled=False, days=0
     )
     assert switch.is_on is False
 
@@ -70,8 +85,8 @@ async def test_turn_on_enables(hass, coordinator, module):
     switch = _switch(coordinator, module, hass)
     switch._is_on = False
     await switch.async_turn_on()
-    coordinator.client.async_set_status.assert_awaited_once_with(
-        "SER1", enabled=True, days=0
+    coordinator.async_command_set_status.assert_awaited_once_with(
+        module, enabled=True, days=0
     )
     assert switch.is_on is True
 
@@ -79,8 +94,8 @@ async def test_turn_on_enables(hass, coordinator, module):
 async def test_set_enabled_service_with_rain_delay(hass, coordinator, module):
     switch = _switch(coordinator, module, hass)
     await switch.async_set_enabled(enabled=False, days=4)
-    coordinator.client.async_set_status.assert_awaited_once_with(
-        "SER1", enabled=False, days=4
+    coordinator.async_command_set_status.assert_awaited_once_with(
+        module, enabled=False, days=4
     )
     assert switch.is_on is False
 

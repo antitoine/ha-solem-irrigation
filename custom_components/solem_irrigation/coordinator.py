@@ -39,9 +39,11 @@ from .const import (
     INPUT_TYPE_FLOW_METER,
     INPUT_TYPE_RAIN_GAUGE,
     LIVE_MODULE_FIELDS,
+    RAIN_DELAY_PERMANENT,
     REGION_EUROPE,
     STORAGE_KEY,
     STORAGE_VERSION,
+    WATERING_STATES_OFF,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -696,15 +698,44 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         """Return the cached live state for a module (possibly empty)."""
         return (self.data or {}).get(module_id, {})
 
+    def _watering(self, module_id: str) -> dict[str, Any]:
+        return self.module_state(module_id).get("status", {}).get("watering", {})
+
     def running_station_index(self, module_id: str) -> int:
         """Return the index of the station currently watering (0 = none)."""
-        watering = self.module_state(module_id).get("status", {}).get("watering", {})
         try:
-            return int(watering.get("runningStation", 0) or 0)
+            return int(self._watering(module_id).get("runningStation", 0) or 0)
         except TypeError, ValueError:
             return 0
 
-    def apply_optimistic_running_station(self, module_id: str, index: int) -> None:
+    def watering_enabled(self, module_id: str) -> bool | None:
+        """Return whether the controller is ON, or None if the cloud does not say.
+
+        Read the way SOLEM's web app reads it: ``state`` 0 (or "OFF") is off,
+        any other value is on. ``state`` does *not* say whether a station is
+        running -- it reads 1 both while idle and while watering.
+        """
+        state = self._watering(module_id).get("state")
+        if state is None:
+            return None
+        return state not in WATERING_STATES_OFF
+
+    def rain_delay_days(self, module_id: str) -> int | None:
+        """Return the days left before an OFF controller turns itself back on.
+
+        0 when it is on or off permanently; None if the cloud does not say.
+        """
+        if (enabled := self.watering_enabled(module_id)) is None:
+            return None
+        if enabled:
+            return 0
+        try:
+            days = int(self._watering(module_id).get("rainDelay", 0) or 0)
+        except TypeError, ValueError:
+            return 0
+        return 0 if days >= RAIN_DELAY_PERMANENT else max(days, 0)
+
+    def _apply_optimistic_watering(self, module_id: str, **fields: Any) -> None:
         """Optimistically reflect a manual command before the next poll.
 
         LoRa downlinks are slow, so update the cache immediately and notify
@@ -713,12 +744,14 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         data = dict(self.data or {})
         state = dict(data.get(module_id, {}))
         status = dict(state.get("status", {}))
-        watering = dict(status.get("watering", {}))
-        watering["runningStation"] = index
-        status["watering"] = watering
+        status["watering"] = {**status.get("watering", {}), **fields}
         state["status"] = status
         data[module_id] = state
         self.async_set_updated_data(data)
+
+    def apply_optimistic_running_station(self, module_id: str, index: int) -> None:
+        """Optimistically show ``index`` as the running station (0 = none)."""
+        self._apply_optimistic_watering(module_id, runningStation=index)
 
     # -- commands (client call + optimistic update + reconcile) ------------
     # Shared by the station valves and the ``run`` service so the optimistic
@@ -743,4 +776,17 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
     ) -> None:
         """Start a stored program (its first station appears on the next poll)."""
         await self.client.async_run_program(module.serial, program.id)
+        self.async_schedule_refresh()
+
+    async def async_command_set_status(
+        self, module: SolemModule, enabled: bool, days: int = 0
+    ) -> None:
+        """Turn a controller ON, or OFF permanently (``days=0``) or for N days."""
+        await self.client.async_set_status(module.serial, enabled=enabled, days=days)
+        if self.watering_enabled(module.id) is not None:
+            # Only where the cloud reports the status: inventing one would make
+            # a controller that never does look like it reports it.
+            self._apply_optimistic_watering(
+                module.id, state=1 if enabled else 0, rainDelay=0 if enabled else days
+            )
         self.async_schedule_refresh()

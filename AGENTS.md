@@ -50,10 +50,11 @@ maintainable.
 - **Platforms** — thin wrappers over coordinator data:
   - `valve.py` — one valve per station (only one is ever open: the hardware
     waters one station at a time).
-  - `switch.py` — the assumed-state *Irrigation enabled* switch; also registers
-    the `run` and `set_enabled` services.
+  - `switch.py` — the *Irrigation enabled* switch (live ON/OFF, assumed-state
+    fallback); also registers the `run` and `set_enabled` services.
   - `select.py` — *Run program* (momentary; resets to a neutral option).
-  - `number.py` — per-station *Run duration* and assumed-state *Rain delay*.
+  - `number.py` — per-station *Run duration* and *Rain delay* (live days
+    left, assumed-state fallback).
   - `button.py` — global *Stop watering*.
   - `sensor.py` — *Watering station*, *Last communication*, *Battery*, per
     flow meter *water used* (cumulative) + *flow rate*, and per rain gauge
@@ -70,10 +71,10 @@ maintainable.
 ## 🔁 Development workflow
 
 1. **Understand** the request and the existing code.
-2. **Implement** following the structure above. Keep assumed-state entities
-   (`enabled`, `rain_delay`) restoring across restarts, and route every manual
-   command through the coordinator's command helpers so the optimistic update
-   and reconcile stay consistent.
+2. **Implement** following the structure above. Keep the assumed-state
+   fallback of `enabled` and `rain_delay` restoring across restarts, and route
+   every manual command through the coordinator's command helpers so the
+   optimistic update and reconcile stay consistent.
 3. **Verify & commit**: you MUST pass the QA checklist in
    [CONTRIBUTING.md](CONTRIBUTING.md).
    - **Conventional Commits**: `feat:`, `fix:`, `refactor:`, `chore:`, `docs:`,
