@@ -55,6 +55,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: SolemConfigEntry) -> boo
     # entity's `DeviceInfo`. Hence both passes live here rather than in
     # `entity.py`; omitting the key in `DeviceInfo` never clears the link.
     device_registry = dr.async_get(hass)
+
+    # Up to 0.9.0b1 a Bluetooth-only controller got a full set of entities, none
+    # of which could read or command it. Drop its device, and with it those
+    # entities, rather than leave them looking alive.
+    for module in coordinator.modules.values():
+        if module.is_bluetooth_only and (
+            device := device_registry.async_get_device_by_identifier(
+                (DOMAIN, module.id), entry.entry_id
+            )
+        ):
+            device_registry.async_update_device(
+                device.id, remove_config_entry_id=entry.entry_id
+            )
+
     device_ids: dict[str, str] = {}
     relevant = coordinator.relevant_module_ids()
     for module in coordinator.modules.values():

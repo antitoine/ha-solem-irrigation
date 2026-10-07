@@ -279,15 +279,23 @@ class SolemModule:
 
     @property
     def is_controller(self) -> bool:
-        """True for irrigation controllers (a watering type with stations).
+        """True for irrigation controllers the cloud can drive.
 
         Uses SOLEM's own ``typeIsWatering`` flag, which is the authoritative
         signal: it is True for irrigation controllers (LR-IS/LR-IP/WF-IS…) and
         False for pool controllers (which can *also* expose ``outputs``),
         sensors, and the gateway. Filtering on ``type`` prefixes or merely
         "has stations" would wrongly pick up the pool controller.
+
+        A Bluetooth-only controller is left out: MySOLEM cannot reach it, so
+        its entities could neither read its state nor command it -- they only
+        ever looked like they did.
         """
-        return bool(self.stations) and bool(self.raw.get("typeIsWatering"))
+        return (
+            bool(self.stations)
+            and bool(self.raw.get("typeIsWatering"))
+            and not self.is_bluetooth_only
+        )
 
     @property
     def is_bluetooth_only(self) -> bool:
@@ -486,9 +494,9 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
             if bluetooth_only := [m for m in modules.values() if m.is_bluetooth_only]:
                 _LOGGER.warning(
                     "SOLEM: %s can only be reached over Bluetooth from a phone. "
-                    "MySOLEM has no live link to such a module, so its watering "
-                    "state cannot be read from Home Assistant and its entities "
-                    "will not reflect what it is doing",
+                    "MySOLEM has no live link to such a module, so Home "
+                    "Assistant can neither read nor command it, and it gets no "
+                    "entities",
                     ", ".join(f"{m.name} ({m.type})" for m in bluetooth_only),
                 )
 
@@ -665,12 +673,18 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         type, so those are admitted on the strength of what they measure: a flow
         meter (lr-fl and friends -- untested, as I only have the
         controller-attached topology) or a rain gauge (the LR-MS, #8).
+
+        Nothing Bluetooth-only is owned: the cloud cannot reach it.
         """
         ids = {
             m.id
             for m in self.modules.values()
             if m.is_controller
-            or ((m.flow_meters or m.rain_gauges) and not m.raw.get("typeIsPoolProduct"))
+            or (
+                (m.flow_meters or m.rain_gauges)
+                and not m.raw.get("typeIsPoolProduct")
+                and not m.is_bluetooth_only
+            )
         }
         for module_id in list(ids):
             relay = self.module_state(module_id).get("relay")

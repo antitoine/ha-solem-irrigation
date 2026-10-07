@@ -367,6 +367,47 @@ async def test_an_account_of_bluetooth_only_controllers_loads(
     state.assert_not_awaited()
 
 
+async def test_a_bluetooth_only_controller_leftover_is_removed(
+    hass: HomeAssistant, entry
+) -> None:
+    """Up to 0.9.0b1 a BL-IP got entities that could not work; they must go."""
+    bl_ip = {**CONTROLLER, "name": "Tennis", "type": "bl-ip", "isBluetoothOnly": True}
+    devices = dr.async_get(hass)
+    entities = er.async_get(hass)
+    leftover = devices.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "b1")}
+    )
+    entities.async_get_or_create(
+        "switch",
+        DOMAIN,
+        "b1_enabled",
+        config_entry=entry,
+        device_id=leftover.id,
+    )
+    pages = {"m1": (CONTROLLER, []), "b1": (bl_ip, [])}
+
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["m1", "b1"])),
+        patch(_GET, AsyncMock(side_effect=lambda module_id: pages[module_id])),
+        patch(_STATE, AsyncMock(return_value={})),
+        patch(_FIELDS, AsyncMock(return_value={})),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    def device(module_id: str) -> dr.DeviceEntry | None:
+        return devices.async_get_device_by_identifier(
+            (DOMAIN, module_id), entry.entry_id
+        )
+
+    assert device("b1") is None
+    assert entities.async_get_entity_id("switch", DOMAIN, "b1_enabled") is None
+    # The LoRa controller next to it is untouched.
+    assert device("m1") is not None
+    assert entities.async_get_entity_id("switch", DOMAIN, "m1_enabled") is not None
+
+
 async def test_only_a_device_that_left_the_account_can_be_removed(
     hass: HomeAssistant, entry
 ) -> None:

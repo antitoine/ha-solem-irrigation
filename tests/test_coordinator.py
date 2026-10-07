@@ -144,6 +144,26 @@ def test_is_bluetooth_only():
     assert _module().is_bluetooth_only is False
 
 
+def test_a_bluetooth_only_controller_is_not_a_controller():
+    """MySOLEM can neither read nor command it, so it gets no entities."""
+    module = _module(
+        type="bl-ip", raw={"typeIsWatering": True, "isBluetoothOnly": True}
+    )
+    assert module.is_controller is False
+
+
+async def test_relevant_module_ids_leave_out_bluetooth_only_modules(coordinator):
+    gauge = SolemRainGauge(id="r1", name="R", index=1, expression="x", raw={})
+    coordinator.modules = {
+        "b1": _module(id="b1", raw={"typeIsWatering": True, "isBluetoothOnly": True}),
+        "b2": _module(
+            id="b2", raw={"isBluetoothOnly": True}, stations=[], rain_gauges=[gauge]
+        ),
+    }
+    coordinator.data = {}
+    assert coordinator.relevant_module_ids() == set()
+
+
 def test_find_station_and_program():
     module = _module()
     assert module.find_station("Pelouse 1").id == "s1"

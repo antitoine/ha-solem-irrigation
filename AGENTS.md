@@ -38,7 +38,8 @@ maintainable.
   to mask slow LoRa downlinks. Also persists the per-station run duration and
   polls each flow meter (its lifetime counter plus a derived flow rate) and
   rain gauge (its lifetime total, plus SOLEM's live threshold flag). Bluetooth-
-  only modules are never state-polled: the cloud cannot reach them.
+  only modules are never state-polled and get no entities: the cloud cannot
+  reach them.
 - **`__init__.py`** — entry setup / unload, legacy-entity cleanup, and the
   device pre-registration that also links each controller to its LoRa gateway.
   The link uses `via_device_id`, which needs a device-registry id, so it cannot
