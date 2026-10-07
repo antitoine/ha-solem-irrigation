@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0b2] - 2026-10-07
+
+Second beta of 0.9.0, shaped by the first real LR-MS rain gauge report in
+[#8](https://github.com/antitoine/ha-solem-irrigation/issues/8). To install it,
+enable **Show beta versions** in HACS.
+
+### Changed
+
+- **The *Irrigation enabled* switch and the *Rain delay* number now show what
+  the controller reports.** They used to be assumed state, so an OFF set
+  outside Home Assistant never showed: when a rain gauge crossed its threshold
+  and MySOLEM set every linked controller to *OFF 1 day*, each switch still read
+  on and each delay 0. The live state carries the status after all — read the
+  way SOLEM's own web app reads it — so both now follow it, the delay showing
+  the days left that the controller reports. A controller whose state carries
+  no status keeps the previous behaviour: the last value set from Home
+  Assistant, restored across restarts.
+- ⚠️ **Breaking: Bluetooth-only controllers (BL-IP …) no longer get entities,
+  and the device and entities earlier versions created are removed.** MySOLEM
+  has no live link to them, so those entities could neither read nor command
+  the controller — they only ever looked like they did. Any dashboard card or
+  automation still referring to them must be updated. The startup warning
+  naming them stays.
+  ([#11](https://github.com/antitoine/ha-solem-irrigation/issues/11))
+- **The rain threshold's action is named.** Its *threshold_action* attribute
+  now reads *No action* or *Off for 1 day* instead of SOLEM's raw code (0 and 6,
+  as matched against the MySOLEM screen by the #8 reporter); any other code is
+  still shown raw. The configured threshold and action are also no longer lost
+  when the polled record omits them.
+
+### Added
+
+- **When the rain threshold last fired.** A *last_threshold_alert* attribute on
+  the *rain threshold* binary sensor, from SOLEM's own record.
+- **Diagnostics keep the first reading of each sensor's 24-hour window**, which
+  the 60-reading cap could drop — the only way to check a cumulative sensor's
+  daily total against MySOLEM's.
+
 ## [0.9.0b1] - 2026-10-04
 
 First beta of 0.9.0. It is aimed at the people who reported
@@ -323,7 +361,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0b1...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0b2...HEAD
+[0.9.0b2]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0b1...v0.9.0b2
 [0.9.0b1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.1...v0.9.0b1
 [0.8.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...v0.8.0
