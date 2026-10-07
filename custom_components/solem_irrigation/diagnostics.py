@@ -125,6 +125,9 @@ async def _input_samples(client: SolemApiClient, module: SolemModule) -> dict[st
             "window_tick_count": len(ticks),
             # Already scaled by the cloud (``forceRawOrComputed=computed``).
             "window_ticks": ticks[-SAMPLE_MAX_TICKS:],
+            # The cap above can drop the start of the window, and with it the
+            # only way to tell how much a cumulative input moved over the day.
+            "window_first_tick": ticks[0] if ticks else None,
             # Only what moved since setup: the rest is in ``raw_inputs``. The
             # window's ``name`` is always blank (the client fills the setup copy
             # from the page's label), so it would only add noise.

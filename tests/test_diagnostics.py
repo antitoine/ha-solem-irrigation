@@ -265,10 +265,13 @@ async def test_diagnostics_samples_what_each_input_reported(hass, entry):
     assert rain["window_tick_count"] == 61
     assert len(rain["window_ticks"]) == 60
     assert rain["window_ticks"][-1]["value"] == 0.5
+    # ...but the window's start survives the cap, for a day's total.
+    assert rain["window_first_tick"]["value"] == 59
     # Only what moved since setup is repeated.
     assert rain["changed_since_setup"] == {"isLastMeasureBeyondThresholds": True}
     # An input the window did not mention still gets its last tick...
     assert samples["i1"]["window_tick_count"] == 0
+    assert samples["i1"]["window_first_tick"] is None
     assert "last_tick" in samples["i1"]
     # ...and an empty slot costs no request at all.
     assert "i0" not in samples
