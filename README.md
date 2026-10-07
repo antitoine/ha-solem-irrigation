@@ -56,7 +56,7 @@ own device with:
 | Entity | What it does |
 | --- | --- |
 | **Sensor** *&lt;gauge&gt; rainfall* | SOLEM's lifetime rainfall total, in mm. For rain per day or week, point a [`utility_meter`](https://www.home-assistant.io/integrations/utility_meter/) at it. |
-| **Binary sensor** *&lt;gauge&gt; rain threshold* | SOLEM's own "beyond thresholds" flag for the gauge, shown as-is — on when SOLEM considers the rainfall threshold set in MySOLEM crossed. The threshold and SOLEM's configured action are attributes. |
+| **Binary sensor** *&lt;gauge&gt; rain threshold* | SOLEM's own "beyond thresholds" flag for the gauge, shown as-is — on when SOLEM considers the rainfall threshold set in MySOLEM crossed. Attributes: the daily threshold, the action MySOLEM takes when it is exceeded (e.g. *Off for 1 day*), and when it last fired. |
 
 ### Actions (services)
 
@@ -139,8 +139,9 @@ pool integration, not this one.)
   briefly unknown in the first minute of a run.
 - The *rain threshold* binary sensor is SOLEM's own flag, shown as-is and not
   re-derived: SOLEM documents neither when it clears nor exactly what it is
-  compared against. It says nothing about what your controllers did — that
-  action is a MySOLEM setting.
+  compared against. What your controllers then do is a MySOLEM setting (the
+  *threshold_action* attribute); whether they actually went OFF shows on each
+  controller's *Irrigation enabled* switch.
 
 ## Reporting a problem
 

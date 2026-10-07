@@ -84,6 +84,12 @@ INPUT_TYPE_FLOW_METER = 1
 # *sensor* the bundle lists separately.
 INPUT_TYPE_RAIN_GAUGE = 14
 
+# What MySOLEM does to the controllers linked to a rain gauge once its daily
+# threshold is crossed (``actionWhenHighDailyThresholdExceeded``). Only the codes
+# a user has matched against the MySOLEM screen are named (#8); any other is
+# passed through raw rather than guessed at.
+THRESHOLD_ACTIONS = {0: "none", 6: "off_1_day"}
+
 # Reading unit, as reported by an input's ``unit`` field. SOLEM stores volumes
 # in whichever of these the meter was configured with and converts for display.
 INPUT_UNIT_LITRE = 1

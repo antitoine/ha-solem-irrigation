@@ -7,7 +7,9 @@ from typing import Any
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
+from .const import THRESHOLD_ACTIONS
 from .coordinator import (
     SolemConfigEntry,
     SolemDataUpdateCoordinator,
@@ -60,11 +62,14 @@ class SolemRainThresholdSensor(SolemModuleEntity, BinarySensorEntity):
 
     @property
     def _record(self) -> dict[str, Any]:
-        # Until the first poll, the module page's setup-time copy is the best
-        # there is -- and it is minutes old at worst.
-        return self.coordinator.input_record(self._gauge_id) or next(
+        # The polled record wins, but the module page's setup-time copy fills in
+        # what it lacks: the two do not always carry the same keys (an action
+        # never configured can be absent), and until the first poll the setup
+        # copy is all there is.
+        setup = next(
             (g.raw for g in self._module.rain_gauges if g.id == self._gauge_id), {}
         )
+        return {**setup, **(self.coordinator.input_record(self._gauge_id) or {})}
 
     @property
     def is_on(self) -> bool | None:
@@ -74,11 +79,26 @@ class SolemRainThresholdSensor(SolemModuleEntity, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Expose the configured threshold and SOLEM's action code for it."""
+        """Expose the configured threshold, its action, and when it last fired."""
         record = self._record
+        last_alert = record.get("lastHighThresholdAlertSent")
         return {
             "daily_threshold": record.get("highThreshold"),
-            # A SOLEM enum whose values are undocumented; kept raw so a user
-            # can correlate it with what MySOLEM shows.
-            "threshold_action": record.get("actionWhenHighDailyThresholdExceeded"),
+            "threshold_action": _threshold_action(
+                record.get("actionWhenHighDailyThresholdExceeded")
+            ),
+            "last_threshold_alert": (
+                dt_util.parse_datetime(last_alert) if last_alert else None
+            ),
         }
+
+
+def _threshold_action(code: Any) -> Any:
+    """Name a known action code; pass any other through raw.
+
+    MySOLEM's own form posts the code as a string, so both spellings occur.
+    """
+    try:
+        return THRESHOLD_ACTIONS.get(int(code), code)
+    except TypeError, ValueError:
+        return code

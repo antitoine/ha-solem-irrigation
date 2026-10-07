@@ -31,7 +31,22 @@
   "entity": {
     "binary_sensor": {
       "rain_threshold": {
-        "name": "Seuil de pluie {gauge}"
+        "name": "Seuil de pluie {gauge}",
+        "state_attributes": {
+          "daily_threshold": {
+            "name": "Seuil journalier"
+          },
+          "threshold_action": {
+            "name": "Action en cas de dépassement",
+            "state": {
+              "none": "Aucune action",
+              "off_1_day": "OFF 1 jour"
+            }
+          },
+          "last_threshold_alert": {
+            "name": "Dernière alerte de seuil"
+          }
+        }
       }
     },
     "switch": {
