@@ -346,6 +346,74 @@ async def test_rain_gauge_entities_are_accepted_by_home_assistant(
     assert rain_device.via_device_id == gateway.id
 
 
+async def test_a_wired_rain_sensor_is_accepted_by_home_assistant(
+    hass: HomeAssistant, entry
+) -> None:
+    """The LR-IP-ECO of #8: a turbine (not modelled) and a dry-contact sensor."""
+    lr_ip_eco = {
+        **CONTROLLER,
+        "name": "Ceyreste",
+        "type": "lr-ip-eco",
+        "numberOfInputs": 2,
+    }
+    turbine = {
+        "id": "t1",
+        "name": "Turbine",
+        "type": 33,
+        "unit": 1,
+        "index": 1,
+        "expression": "javascript:if(x<=0){0.0}else{x}",
+    }
+    rain = {
+        "id": "c1",
+        "name": "Capteur de pluie",
+        "type": 2,
+        "unit": 0,
+        "index": 2,
+        "expression": "x",
+        "highThreshold": 1,
+        "isLastMeasureBeyondThresholds": True,
+    }
+    pages = {"m1": (lr_ip_eco, [turbine, rain]), "g1": (GATEWAY, [])}
+    states = {
+        "m1": {
+            "relay": "g1",
+            "status": {"watering": {"runningStation": 0, "sensor": 1, "state": 1}},
+        },
+        "g1": {},
+    }
+    ticks = {
+        "t1": {"value": 0, "timestamp": "2026-10-07T18:55:00.000Z"},
+        "c1": {"value": 1, "timestamp": "2026-10-07T18:55:00.000Z"},
+    }
+    tick = AsyncMock(side_effect=lambda input_id: ticks[input_id])
+
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["m1", "g1"])),
+        patch(_GET, AsyncMock(side_effect=lambda module_id: pages[module_id])),
+        patch(_STATE, AsyncMock(side_effect=lambda module_id: states[module_id])),
+        patch(_FIELDS, AsyncMock(return_value={})),
+        patch(_SENSOR_DATA, AsyncMock(return_value=[turbine, rain])),
+        patch(_TICK, tick),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    wet = hass.states.get("binary_sensor.ceyreste_capteur_de_pluie")
+    assert wet is not None, [s.entity_id for s in hass.states.async_all()]
+    assert wet.state == "on"
+    assert wet.attributes["device_class"] == "moisture"
+    assert wet.attributes["last_measurement"] == "2026-10-07T18:55:00+00:00"
+    # Only the rain sensor is read; the turbine still waits on #12.
+    tick.assert_awaited_once_with("c1")
+    assert not [
+        s.entity_id
+        for s in hass.states.async_all()
+        if s.entity_id.endswith(("_water_used", "_flow_rate"))
+    ]
+
+
 async def test_an_account_of_bluetooth_only_controllers_loads(
     hass: HomeAssistant, entry
 ) -> None:

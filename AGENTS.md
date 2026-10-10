@@ -36,10 +36,10 @@ maintainable.
   (classifying irrigation controllers via SOLEM's `typeIsWatering` flag),
   polls live state, and owns the **optimistic update + delayed reconcile** used
   to mask slow LoRa downlinks. Also persists the per-station run duration and
-  polls each flow meter (its lifetime counter plus a derived flow rate) and
-  rain gauge (its lifetime total, plus SOLEM's live threshold flag). Bluetooth-
-  only modules are never state-polled and get no entities: the cloud cannot
-  reach them.
+  polls each flow meter (its lifetime counter plus a derived flow rate), rain
+  gauge (its lifetime total, plus SOLEM's live threshold flag) and on/off rain
+  sensor (its newest 0/1 tick). Bluetooth-only modules are never state-polled
+  and get no entities: the cloud cannot reach them.
 - **`__init__.py`** — entry setup / unload, legacy-entity cleanup, and the
   device pre-registration that also links each controller to its LoRa gateway.
   The link uses `via_device_id`, which needs a device-registry id, so it cannot
@@ -59,7 +59,8 @@ maintainable.
   - `sensor.py` — *Watering station*, *Last communication*, *Battery*, per
     flow meter *water used* (cumulative) + *flow rate*, and per rain gauge
     *rainfall* (cumulative).
-  - `binary_sensor.py` — per rain gauge *rain threshold* (SOLEM's flag).
+  - `binary_sensor.py` — per rain gauge *rain threshold* (SOLEM's flag), and
+    per on/off rain sensor its wet/dry state.
 - **`diagnostics.py`** — the raw dump users attach to issues, including a live
   sample of every input's recent readings.
 - **`config_flow.py`** — setup (email / password / region) with re-auth.

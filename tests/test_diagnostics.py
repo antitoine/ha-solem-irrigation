@@ -20,6 +20,8 @@ from custom_components.solem_irrigation.coordinator import (
     SolemFlowReading,
     SolemModule,
     SolemProgram,
+    SolemRainSensor,
+    SolemRainSensorReading,
     SolemStation,
 )
 from custom_components.solem_irrigation.diagnostics import (
@@ -81,6 +83,9 @@ def module() -> SolemModule:
                 raw=dict(FLOW_INPUT),
             )
         ],
+        rain_sensors=[
+            SolemRainSensor(id="i2", name="Capteur de pluie", index=2, raw={})
+        ],
         # Type 0 is an empty input slot, as on a real LR-IP-ECO.
         raw_inputs=[dict(FLOW_INPUT), dict(RAIN_INPUT), {"id": "i0", "type": 0}],
     )
@@ -107,6 +112,11 @@ def entry(module) -> MagicMock:
         )
     }
     coordinator.rain = {}
+    coordinator.rain_sensor_readings = {
+        "i2": SolemRainSensorReading(
+            wet=True, timestamp=dt_util.parse_datetime("2026-09-21T05:55:00+00:00")
+        )
+    }
     coordinator.client = MagicMock()
     coordinator.client.async_get_module_sensor_data = AsyncMock(
         return_value=[
@@ -252,6 +262,17 @@ async def test_diagnostics_includes_state_and_flow(hass, entry):
     assert result["modules"]["m1"]["is_relevant"] is True
     assert result["flow_readings"]["i1"]["volume"] == 3970.0
     assert result["coordinator"]["last_update_success"] is True
+
+
+async def test_diagnostics_includes_rain_sensors(hass, entry):
+    result = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert result["modules"]["m1"]["rain_sensors"] == [
+        {"name": "Capteur de pluie", "index": 2}
+    ]
+    assert result["rain_sensor_readings"] == {
+        "i2": {"wet": True, "timestamp": "2026-09-21T05:55:00+00:00"}
+    }
 
 
 async def test_diagnostics_samples_what_each_input_reported(hass, entry):

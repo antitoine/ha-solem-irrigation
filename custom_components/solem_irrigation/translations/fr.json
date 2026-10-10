@@ -49,6 +49,14 @@
             "name": "Dernière alerte de seuil"
           }
         }
+      },
+      "rain_sensor": {
+        "name": "{sensor}",
+        "state_attributes": {
+          "last_measurement": {
+            "name": "Dernière mesure"
+          }
+        }
       }
     },
     "switch": {

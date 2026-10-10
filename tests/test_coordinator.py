@@ -27,9 +27,11 @@ from custom_components.solem_irrigation.coordinator import (
     SolemModule,
     SolemProgram,
     SolemRainGauge,
+    SolemRainSensor,
     SolemStation,
     _build_flow_meters,
     _build_rain_gauges,
+    _build_rain_sensors,
     _compute_flow_rate,
     _find_by_token,
 )
@@ -996,3 +998,100 @@ async def test_poll_keeps_the_previous_rain_total_when_the_tick_fails(coordinato
     await coordinator._async_update_data()
     assert coordinator.rain_reading("r1").total == 27.94
     assert coordinator.input_record("r1") is None  # never returned by a window
+
+
+# -- rain sensors (#8) ----------------------------------------------------------
+
+# Trimmed from the dry-contact rain sensor on an LR-IP-ECO, issue #8.
+RAIN_SENSOR_INPUT = {
+    "id": "c1",
+    "name": "Capteur de pluie",
+    "getName": "Capteur de pluie",
+    "type": 2,
+    "unit": 0,
+    "index": 2,
+    "expression": "x",
+    "lowThreshold": 0,
+    "highThreshold": 1,
+    "typeIsTOR": True,
+    "isLastMeasureBeyondThresholds": True,
+}
+# The same controller's turbine, which is not modelled (#12).
+TURBINE_INPUT = {
+    "id": "t1",
+    "name": "Turbine",
+    "type": 33,
+    "unit": 1,
+    "index": 1,
+    "expression": "javascript:if(x<=0){0.0}else{x}",
+}
+
+
+def test_build_rain_sensors_keeps_only_type_2_in_index_order():
+    second = {**RAIN_SENSOR_INPUT, "id": "c2", "name": "", "index": 3}
+    sensors = _build_rain_sensors(
+        [second, dict(TURBINE_INPUT), dict(RAIN_SENSOR_INPUT), dict(RAIN_INPUT)]
+    )
+    assert sensors == [
+        SolemRainSensor(
+            id="c1", name="Capteur de pluie", index=2, raw=RAIN_SENSOR_INPUT
+        ),
+        # A blank label falls back to SOLEM's own.
+        SolemRainSensor(id="c2", name="Capteur de pluie", index=3, raw=second),
+    ]
+
+
+async def test_rain_sensor_module_is_relevant(coordinator):
+    """A sensor module with only a rain sensor is ours, like a gauge's."""
+    sensor = _build_rain_sensors([dict(RAIN_SENSOR_INPUT)])
+    coordinator.modules = {
+        "ms": _module(
+            id="ms",
+            raw={"typeIsWatering": False},
+            stations=[],
+            programs=[],
+            rain_sensors=sensor,
+        )
+    }
+    coordinator.data = {"ms": {}}
+    assert coordinator.relevant_module_ids() == {"ms"}
+
+
+@pytest.mark.parametrize(("value", "wet"), [(1, True), (0, False)])
+async def test_poll_reads_the_rain_sensor_from_its_newest_tick(coordinator, value, wet):
+    """A controller with no meter or gauge still gets its inputs polled."""
+    newest = dt_util.utcnow() - timedelta(hours=12)
+    coordinator.modules = {
+        "m1": _module(rain_sensors=_build_rain_sensors([dict(RAIN_SENSOR_INPUT)]))
+    }
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = AsyncMock(return_value=[])
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        return_value={"value": value, "timestamp": newest.isoformat()}
+    )
+
+    await coordinator._async_update_data()
+
+    reading = coordinator.rain_sensor_reading("c1")
+    assert reading.wet is wet
+    # However old: the last tick stands until the next one.
+    assert reading.timestamp == newest
+    coordinator.client.async_get_last_input_tick.assert_awaited_once_with("c1")
+
+
+async def test_poll_keeps_the_previous_rain_sensor_reading_on_failure(coordinator):
+    coordinator.modules = {
+        "m1": _module(rain_sensors=_build_rain_sensors([dict(RAIN_SENSOR_INPUT)]))
+    }
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = AsyncMock(return_value=[])
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        return_value={"value": 1, "timestamp": dt_util.utcnow().isoformat()}
+    )
+    await coordinator._async_update_data()
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        side_effect=SolemConnectionError("offline")
+    )
+    await coordinator._async_update_data()
+    assert coordinator.rain_sensor_reading("c1").wet is True
+    assert coordinator.rain_sensor_reading("other") is None

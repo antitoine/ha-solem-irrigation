@@ -49,6 +49,7 @@ your account:
 | **Sensor** *Battery* | Battery indicator (battery-powered modules). |
 | **Sensor** *&lt;meter&gt; water used* | SOLEM's lifetime water counter, for controllers with a flow meter (débitmètre). Add it to the Home Assistant **Water** dashboard. |
 | **Sensor** *&lt;meter&gt; flow rate* | How fast water is flowing right now — non-zero outside a watering run means a leak. |
+| **Binary sensor** *&lt;rain sensor&gt;* | For a controller with an on/off rain sensor (capteur de pluie, e.g. a dry-contact Rain Bird RSD) on its sensor input: on (*wet*) while the sensor reports rain, off (*dry*) once it has dried out. Named after the sensor in MySOLEM. While it is wet, the controller skips the stations set to obey it, but it stays ON, so *Irrigation enabled* does not change. |
 
 A SOLEM **rain gauge** (pluviomètre, e.g. on an LR-MS sensor module) gets its
 own device with:

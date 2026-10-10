@@ -4,8 +4,10 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 
 from custom_components.solem_irrigation.binary_sensor import (
+    SolemRainSensorEntity,
     SolemRainThresholdSensor,
     async_setup_entry,
 )
@@ -13,6 +15,8 @@ from custom_components.solem_irrigation.coordinator import (
     SolemDataUpdateCoordinator,
     SolemModule,
     SolemRainGauge,
+    SolemRainSensor,
+    SolemRainSensorReading,
 )
 
 SNAPSHOT = {
@@ -44,6 +48,7 @@ def coordinator(module) -> MagicMock:
     coord = MagicMock(spec=SolemDataUpdateCoordinator)
     coord.modules = {module.id: module}
     coord.input_record.return_value = None
+    coord.rain_sensor_reading.return_value = None
     return coord
 
 
@@ -128,3 +133,44 @@ async def test_async_setup_entry_only_for_relevant_modules(coordinator, module):
     coordinator.relevant_module_ids.return_value = {"ms"}
     await async_setup_entry(MagicMock(), entry, added.extend)
     assert [s.unique_id for s in added] == ["ms_rain_threshold_r1"]
+
+
+RAIN_SENSOR = SolemRainSensor(id="c1", name="Capteur de pluie", index=2, raw={})
+
+
+def test_rain_sensor_is_wet_while_its_last_tick_is_1(coordinator, module):
+    sensor = SolemRainSensorEntity(coordinator, module, RAIN_SENSOR)
+    assert sensor.unique_id == "ms_rain_sensor_c1"
+    assert sensor.device_class is BinarySensorDeviceClass.MOISTURE
+    # Named after the input alone, so "Capteur de pluie" is not said twice.
+    assert sensor.translation_placeholders == {"sensor": "Capteur de pluie"}
+    # Unknown, not dry, until the sensor has reported.
+    assert sensor.is_on is None
+    assert sensor.extra_state_attributes is None
+
+    measured = datetime(2026, 10, 7, 18, 55, tzinfo=UTC)
+    coordinator.rain_sensor_reading.return_value = SolemRainSensorReading(
+        wet=True, timestamp=measured
+    )
+    assert sensor.is_on is True
+    assert sensor.extra_state_attributes == {
+        "last_measurement": "2026-10-07T18:55:00+00:00"
+    }
+
+    coordinator.rain_sensor_reading.return_value = SolemRainSensorReading(
+        wet=False, timestamp=measured
+    )
+    assert sensor.is_on is False
+
+
+async def test_async_setup_entry_adds_rain_sensors(coordinator, module):
+    module.rain_sensors = [RAIN_SENSOR]
+    entry = MagicMock()
+    entry.runtime_data = coordinator
+    coordinator.relevant_module_ids.return_value = {"ms"}
+    added: list = []
+    await async_setup_entry(MagicMock(), entry, added.extend)
+    assert [s.unique_id for s in added] == [
+        "ms_rain_threshold_r1",
+        "ms_rain_sensor_c1",
+    ]

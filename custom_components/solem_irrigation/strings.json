@@ -49,6 +49,14 @@
             "name": "Last threshold alert"
           }
         }
+      },
+      "rain_sensor": {
+        "name": "{sensor}",
+        "state_attributes": {
+          "last_measurement": {
+            "name": "Last measurement"
+          }
+        }
       }
     },
     "switch": {

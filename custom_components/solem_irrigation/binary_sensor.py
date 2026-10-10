@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -15,6 +18,7 @@ from .coordinator import (
     SolemDataUpdateCoordinator,
     SolemModule,
     SolemRainGauge,
+    SolemRainSensor,
 )
 from .entity import SolemModuleEntity
 
@@ -27,12 +31,19 @@ async def async_setup_entry(
     """Set up SOLEM binary sensors."""
     coordinator = entry.runtime_data
     relevant = coordinator.relevant_module_ids()
-    async_add_entities(
-        SolemRainThresholdSensor(coordinator, module, gauge)
-        for module in coordinator.modules.values()
-        if module.id in relevant
-        for gauge in module.rain_gauges
-    )
+    entities: list[BinarySensorEntity] = []
+    for module in coordinator.modules.values():
+        if module.id not in relevant:
+            continue
+        entities.extend(
+            SolemRainThresholdSensor(coordinator, module, gauge)
+            for gauge in module.rain_gauges
+        )
+        entities.extend(
+            SolemRainSensorEntity(coordinator, module, sensor)
+            for sensor in module.rain_sensors
+        )
+    async_add_entities(entities)
 
 
 class SolemRainThresholdSensor(SolemModuleEntity, BinarySensorEntity):
@@ -103,3 +114,43 @@ def _threshold_action(code: Any) -> Any:
         return THRESHOLD_ACTIONS.get(int(code), code)
     except TypeError, ValueError:
         return code
+
+
+class SolemRainSensorEntity(SolemModuleEntity, BinarySensorEntity):
+    """An on/off rain sensor wired to a module's input: on while it is wet.
+
+    Read from the input's newest tick, the same 0/1 MySOLEM plots for it. The
+    controller's live state also carries a ``watering.sensor`` field on such a
+    module, but SOLEM's web app never reads it, so what it means is unverified.
+    """
+
+    _attr_translation_key = "rain_sensor"
+    _attr_device_class = BinarySensorDeviceClass.MOISTURE
+
+    def __init__(
+        self,
+        coordinator: SolemDataUpdateCoordinator,
+        module: SolemModule,
+        sensor: SolemRainSensor,
+    ) -> None:
+        """Initialise the entity for ``sensor``."""
+        super().__init__(coordinator, module)
+        self._sensor_id = sensor.id
+        self._attr_unique_id = f"{module.id}_rain_sensor_{sensor.id}"
+        # Named after the input alone: MySOLEM already calls it "Capteur de
+        # pluie" by default, so a "{sensor} rain sensor" name would say it twice.
+        self._attr_translation_placeholders = {"sensor": sensor.name}
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether the sensor is wet, or None until it first reports."""
+        reading = self.coordinator.rain_sensor_reading(self._sensor_id)
+        return reading.wet if reading else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object] | None:
+        """Expose when the sensor last reported."""
+        reading = self.coordinator.rain_sensor_reading(self._sensor_id)
+        if reading is None:
+            return None
+        return {"last_measurement": reading.timestamp.isoformat()}

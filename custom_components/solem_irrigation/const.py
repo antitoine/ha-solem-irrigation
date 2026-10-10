@@ -83,6 +83,11 @@ INPUT_TYPE_FLOW_METER = 1
 # (``x*0.2794`` on an LR-MS). Not to be confused with type 2, the on/off rain
 # *sensor* the bundle lists separately.
 INPUT_TYPE_RAIN_GAUGE = 14
+# An on/off rain sensor (``rainSensors = [2]``), e.g. a dry-contact Rain Bird
+# RSD wired to an LR-IP-ECO's sensor input: each tick reads 1 while it is wet
+# and 0 once it has dried out (#8). MySOLEM plots it as a step chart; a
+# controller then skips the stations set to obey it.
+INPUT_TYPE_RAIN_SENSOR = 2
 
 # What MySOLEM does to the controllers linked to a rain gauge once its daily
 # threshold is crossed (``actionWhenHighDailyThresholdExceeded``). Only the codes
@@ -130,8 +135,10 @@ LIVE_MODULE_FIELDS = (
     "battery",
     "batteryVoltage",
     "batteryLow",
-    # Not surfaced yet: the likely wired rain-sensor contact (issue #8). Free to
-    # carry here, and it keeps a diagnostics dump honest about the live value.
+    # Meaning unknown. Once suspected to be the wired rain-sensor contact, but
+    # an LR-IP-ECO whose rain sensor read wet reported False here (#8), so the
+    # contact is read from the input's own ticks instead. Free to carry, and it
+    # keeps a diagnostics dump honest about the live value.
     "sensorState",
 )
 
