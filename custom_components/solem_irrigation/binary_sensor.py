@@ -38,11 +38,12 @@ async def async_setup_entry(
 class SolemRainThresholdSensor(SolemModuleEntity, BinarySensorEntity):
     """SOLEM's own ``isLastMeasureBeyondThresholds`` flag for a rain gauge.
 
-    Surfaced as-is, never re-derived: the field names point at a *daily*
-    rainfall threshold, but when SOLEM clears the flag is unverified (on a flow
-    meter it has been seen to stay set long after the flow stopped). What the
-    controllers then do about it is a separate MySOLEM setting, so this says
-    the threshold was crossed, not that watering is suspended.
+    Surfaced as-is, never re-derived. It sets when the day's rainfall crosses
+    the threshold, but it latches: on the #8 reporter's LR-MS it stayed set for
+    days after the OFF it triggered had expired, through a day that stayed well
+    under the threshold. What the controllers do about it is a separate MySOLEM
+    setting, so this says the threshold was crossed, not that watering is
+    suspended -- each controller's own ON/OFF status says that.
     """
 
     _attr_translation_key = "rain_threshold"

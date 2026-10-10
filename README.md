@@ -56,7 +56,7 @@ own device with:
 | Entity | What it does |
 | --- | --- |
 | **Sensor** *&lt;gauge&gt; rainfall* | SOLEM's lifetime rainfall total, in mm. For rain per day or week, point a [`utility_meter`](https://www.home-assistant.io/integrations/utility_meter/) at it. |
-| **Binary sensor** *&lt;gauge&gt; rain threshold* | SOLEM's own "beyond thresholds" flag for the gauge, shown as-is — on when SOLEM considers the rainfall threshold set in MySOLEM crossed. Attributes: the daily threshold, the action MySOLEM takes when it is exceeded (e.g. *Off for 1 day*), and when it last fired. |
+| **Binary sensor** *&lt;gauge&gt; rain threshold* | SOLEM's own "beyond thresholds" flag for the gauge, shown as-is — turns on when the day's rainfall crosses the threshold set in MySOLEM, and has been seen to stay on for days after. Attributes: the daily threshold, the action MySOLEM takes when it is exceeded (e.g. *Off for 2 days*), and when it last fired. To know whether watering is held *right now*, read the controllers' *Irrigation enabled* and *Rain delay* instead. |
 
 ### Actions (services)
 
@@ -138,10 +138,13 @@ pool integration, not this one.)
   derived from the last minutes of readings; it reads `0` when idle and can be
   briefly unknown in the first minute of a run.
 - The *rain threshold* binary sensor is SOLEM's own flag, shown as-is and not
-  re-derived: SOLEM documents neither when it clears nor exactly what it is
-  compared against. What your controllers then do is a MySOLEM setting (the
-  *threshold_action* attribute); whether they actually went OFF shows on each
-  controller's *Irrigation enabled* switch.
+  re-derived. It is **not** a "watering is suspended" indicator: on a real
+  LR-MS it stayed on for days after the OFF it triggered had expired, with the
+  controllers back on and watering on schedule. What your controllers do when
+  it fires is a MySOLEM setting (the *threshold_action* attribute); whether
+  they are OFF right now, and for how many more days, shows on each
+  controller's *Irrigation enabled* switch and *Rain delay* number. Use those
+  in automations, and *last_threshold_alert* for when the gauge last fired.
 
 ## Reporting a problem
 
