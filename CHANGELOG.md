@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0b3] - 2026-10-10
+
+Third beta of 0.9.0, from two more reports in
+[#8](https://github.com/antitoine/ha-solem-irrigation/issues/8): a wired on/off
+rain sensor, and an LR-MS rain gauge watched through two threshold trips and
+the OFF they triggered running out. To install it, enable **Show beta
+versions** in HACS.
+
+### Added
+
+- **On/off rain sensors.** A rain sensor wired to a controller's sensor input
+  (capteur de pluie, e.g. a dry-contact Rain Bird RSD on an LR-IP-ECO) now gets
+  a binary sensor named after it in MySOLEM: *wet* while the sensor reports
+  rain, *dry* once it has dried out, read from the 0/1 that MySOLEM plots for
+  it. Identified by SOLEM's own input type (2), which the integration used to
+  ignore. ([#8](https://github.com/antitoine/ha-solem-irrigation/issues/8))
+
+### Changed
+
+- **Two more rain threshold actions are named**: *Off for 2 days* and *Off for
+  3 days* (codes 7 and 8, matched against the MySOLEM screen by the #8
+  reporter).
+- **The *rain threshold* binary sensor is documented for what it is.** On a
+  real LR-MS it stayed on for days after the OFF it triggered had expired, so
+  it records that the threshold was crossed, not that watering is held; the
+  controllers' *Irrigation enabled* and *Rain delay* say that.
+
 ## [0.9.0b2] - 2026-10-07
 
 Second beta of 0.9.0, shaped by the first real LR-MS rain gauge report in
@@ -361,7 +388,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0b2...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0b3...HEAD
+[0.9.0b3]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0b2...v0.9.0b3
 [0.9.0b2]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0b1...v0.9.0b2
 [0.9.0b1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.1...v0.9.0b1
 [0.8.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0...v0.8.1
