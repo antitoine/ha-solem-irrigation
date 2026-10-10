@@ -88,7 +88,7 @@ INPUT_TYPE_RAIN_GAUGE = 14
 # threshold is crossed (``actionWhenHighDailyThresholdExceeded``). Only the codes
 # a user has matched against the MySOLEM screen are named (#8); any other is
 # passed through raw rather than guessed at.
-THRESHOLD_ACTIONS = {0: "none", 6: "off_1_day"}
+THRESHOLD_ACTIONS = {0: "none", 6: "off_1_day", 7: "off_2_days", 8: "off_3_days"}
 
 # Reading unit, as reported by an input's ``unit`` field. SOLEM stores volumes
 # in whichever of these the meter was configured with and converts for display.

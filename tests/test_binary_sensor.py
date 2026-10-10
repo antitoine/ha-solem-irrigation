@@ -86,7 +86,15 @@ def test_threshold_attributes_fall_back_to_the_setup_snapshot(coordinator, modul
 
 @pytest.mark.parametrize(
     ("code", "expected"),
-    [(0, "none"), ("6", "off_1_day"), (2, 2), ("x", "x"), (None, None)],
+    [
+        (0, "none"),
+        ("6", "off_1_day"),
+        (7, "off_2_days"),
+        ("8", "off_3_days"),
+        (2, 2),
+        ("x", "x"),
+        (None, None),
+    ],
 )
 def test_threshold_action_names_only_confirmed_codes(
     coordinator, module, code, expected

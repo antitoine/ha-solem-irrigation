@@ -40,7 +40,9 @@
             "name": "Action en cas de dépassement",
             "state": {
               "none": "Aucune action",
-              "off_1_day": "OFF 1 jour"
+              "off_1_day": "OFF 1 jour",
+              "off_2_days": "OFF 2 jours",
+              "off_3_days": "OFF 3 jours"
             }
           },
           "last_threshold_alert": {
