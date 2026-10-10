@@ -91,11 +91,12 @@ async def async_setup_entry(
 class SolemEnableSwitch(SolemModuleEntity, SwitchEntity, RestoreEntity):
     """Enable / disable a controller.
 
-    The cloud state has no reliable "enabled" flag, so this is an assumed-state
-    switch whose value is restored across restarts.
+    Follows the ON/OFF status the cloud reports, so an OFF set from MySOLEM --
+    by hand, or by a rain gauge crossing its threshold -- shows up here too.
+    A controller whose state carries no status falls back to an assumed state,
+    the last one set from Home Assistant, restored across restarts.
     """
 
-    _attr_assumed_state = True
     _attr_icon = "mdi:power"
     _attr_translation_key = "enabled"
 
@@ -114,9 +115,16 @@ class SolemEnableSwitch(SolemModuleEntity, SwitchEntity, RestoreEntity):
             self._is_on = last.state == "on"
 
     @property
+    def assumed_state(self) -> bool:
+        """True while the cloud reports no ON/OFF status for this controller."""
+        return self.coordinator.watering_enabled(self._module.id) is None
+
+    @property
     def is_on(self) -> bool:
-        """Return the assumed enabled state."""
-        return self._is_on
+        """Return the reported enabled state, else the assumed one."""
+        if (enabled := self.coordinator.watering_enabled(self._module.id)) is None:
+            return self._is_on
+        return enabled
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable the controller."""
@@ -134,8 +142,8 @@ class SolemEnableSwitch(SolemModuleEntity, SwitchEntity, RestoreEntity):
         rain-delay). Exposed both via the switch toggle and the
         ``solem_irrigation.set_enabled`` service.
         """
-        await self.coordinator.client.async_set_status(
-            self._serial, enabled=enabled, days=days
+        await self.coordinator.async_command_set_status(
+            self._module, enabled=enabled, days=days
         )
         self._is_on = enabled
         self.async_write_ha_state()

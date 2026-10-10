@@ -15,6 +15,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.solem_irrigation import (
     PLATFORMS,
     _async_cleanup_legacy_entities,
+    async_remove_config_entry_device,
     async_setup_entry,
     async_unload_entry,
 )
@@ -280,6 +281,139 @@ async def test_unlinkable_relay_leaves_no_via_device(
     assert device.via_device_id is None
 
 
+async def test_rain_gauge_entities_are_accepted_by_home_assistant(
+    hass: HomeAssistant, entry
+) -> None:
+    """A standalone LR-MS rain gauge (#8) gets a device and both entities."""
+    rain_sensor = {
+        "name": "Rain Sensor",
+        "serialNumber": "SERMS",
+        "type": "lr-ms",
+        "typeIsWatering": False,
+        "typeIsSensor": True,
+    }
+    gauge = {
+        "id": "r1",
+        "name": "",
+        "getName": "Pluvio Meter",
+        "type": 14,
+        "unit": 13,
+        "index": 1,
+        "expression": "x*0.2794",
+        "highThreshold": 2,
+        "isLastMeasureBeyondThresholds": False,
+        "actionWhenHighDailyThresholdExceeded": 6,
+    }
+    pages = {"ms": (rain_sensor, [gauge]), "g1": (GATEWAY, [])}
+    states = {"ms": {"relay": "g1"}, "g1": {}}
+    newest = dt_util.utcnow() - timedelta(minutes=3)
+
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["ms", "g1"])),
+        patch(_GET, AsyncMock(side_effect=lambda module_id: pages[module_id])),
+        patch(_STATE, AsyncMock(side_effect=lambda module_id: states[module_id])),
+        patch(_FIELDS, AsyncMock(return_value={})),
+        patch(
+            _SENSOR_DATA,
+            AsyncMock(return_value=[{**gauge, "isLastMeasureBeyondThresholds": True}]),
+        ),
+        patch(
+            _TICK,
+            AsyncMock(return_value={"value": 100, "timestamp": newest.isoformat()}),
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    rainfall = hass.states.get("sensor.rain_sensor_pluvio_meter_rainfall")
+    assert rainfall is not None, [s.entity_id for s in hass.states.async_all()]
+    assert rainfall.state == "27.94"
+    assert rainfall.attributes["device_class"] == "precipitation"
+    assert rainfall.attributes["state_class"] == "total_increasing"
+    assert rainfall.attributes["unit_of_measurement"] == "mm"
+
+    threshold = hass.states.get("binary_sensor.rain_sensor_pluvio_meter_rain_threshold")
+    assert threshold is not None
+    assert threshold.state == "on"
+    assert threshold.attributes["daily_threshold"] == 2
+
+    registry = dr.async_get(hass)
+    rain_device = registry.async_get_device_by_identifier(
+        (DOMAIN, "ms"), entry.entry_id
+    )
+    gateway = registry.async_get_device_by_identifier((DOMAIN, "g1"), entry.entry_id)
+    assert rain_device.via_device_id == gateway.id
+
+
+async def test_a_wired_rain_sensor_is_accepted_by_home_assistant(
+    hass: HomeAssistant, entry
+) -> None:
+    """The LR-IP-ECO of #8: a turbine (not modelled) and a dry-contact sensor."""
+    lr_ip_eco = {
+        **CONTROLLER,
+        "name": "Ceyreste",
+        "type": "lr-ip-eco",
+        "numberOfInputs": 2,
+    }
+    turbine = {
+        "id": "t1",
+        "name": "Turbine",
+        "type": 33,
+        "unit": 1,
+        "index": 1,
+        "expression": "javascript:if(x<=0){0.0}else{x}",
+    }
+    rain = {
+        "id": "c1",
+        "name": "Capteur de pluie",
+        "type": 2,
+        "unit": 0,
+        "index": 2,
+        "expression": "x",
+        "highThreshold": 1,
+        "isLastMeasureBeyondThresholds": True,
+    }
+    pages = {"m1": (lr_ip_eco, [turbine, rain]), "g1": (GATEWAY, [])}
+    states = {
+        "m1": {
+            "relay": "g1",
+            "status": {"watering": {"runningStation": 0, "sensor": 1, "state": 1}},
+        },
+        "g1": {},
+    }
+    ticks = {
+        "t1": {"value": 0, "timestamp": "2026-10-07T18:55:00.000Z"},
+        "c1": {"value": 1, "timestamp": "2026-10-07T18:55:00.000Z"},
+    }
+    tick = AsyncMock(side_effect=lambda input_id: ticks[input_id])
+
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["m1", "g1"])),
+        patch(_GET, AsyncMock(side_effect=lambda module_id: pages[module_id])),
+        patch(_STATE, AsyncMock(side_effect=lambda module_id: states[module_id])),
+        patch(_FIELDS, AsyncMock(return_value={})),
+        patch(_SENSOR_DATA, AsyncMock(return_value=[turbine, rain])),
+        patch(_TICK, tick),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    wet = hass.states.get("binary_sensor.ceyreste_capteur_de_pluie")
+    assert wet is not None, [s.entity_id for s in hass.states.async_all()]
+    assert wet.state == "on"
+    assert wet.attributes["device_class"] == "moisture"
+    assert wet.attributes["last_measurement"] == "2026-10-07T18:55:00+00:00"
+    # Only the rain sensor is read; the turbine still waits on #12.
+    tick.assert_awaited_once_with("c1")
+    assert not [
+        s.entity_id
+        for s in hass.states.async_all()
+        if s.entity_id.endswith(("_water_used", "_flow_rate"))
+    ]
+
+
 async def test_an_account_of_bluetooth_only_controllers_loads(
     hass: HomeAssistant, entry
 ) -> None:
@@ -299,3 +433,101 @@ async def test_an_account_of_bluetooth_only_controllers_loads(
 
     assert entry.state is ConfigEntryState.LOADED
     state.assert_not_awaited()
+
+
+async def test_a_bluetooth_only_controller_leftover_is_removed(
+    hass: HomeAssistant, entry
+) -> None:
+    """Up to 0.9.0b1 a BL-IP got entities that could not work; they must go."""
+    bl_ip = {**CONTROLLER, "name": "Tennis", "type": "bl-ip", "isBluetoothOnly": True}
+    devices = dr.async_get(hass)
+    entities = er.async_get(hass)
+    leftover = devices.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "b1")}
+    )
+    entities.async_get_or_create(
+        "switch",
+        DOMAIN,
+        "b1_enabled",
+        config_entry=entry,
+        device_id=leftover.id,
+    )
+    pages = {"m1": (CONTROLLER, []), "b1": (bl_ip, [])}
+
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["m1", "b1"])),
+        patch(_GET, AsyncMock(side_effect=lambda module_id: pages[module_id])),
+        patch(_STATE, AsyncMock(return_value={})),
+        patch(_FIELDS, AsyncMock(return_value={})),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    def device(module_id: str) -> dr.DeviceEntry | None:
+        return devices.async_get_device_by_identifier(
+            (DOMAIN, module_id), entry.entry_id
+        )
+
+    assert device("b1") is None
+    assert entities.async_get_entity_id("switch", DOMAIN, "b1_enabled") is None
+    # The LoRa controller next to it is untouched.
+    assert device("m1") is not None
+    assert entities.async_get_entity_id("switch", DOMAIN, "m1_enabled") is not None
+
+
+async def test_the_enable_switch_shows_an_off_set_outside_home_assistant(
+    hass: HomeAssistant, entry
+) -> None:
+    """What the #8 reporter saw: a rain gauge set every controller OFF 1 day."""
+    off = {
+        "status": {"watering": {"state": 0, "rainDelay": 1, "runningStation": 0}},
+        "relay": "g1",
+    }
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["m1"])),
+        patch(_GET, AsyncMock(return_value=(CONTROLLER, []))),
+        patch(_STATE, AsyncMock(return_value=off)),
+        patch(_FIELDS, AsyncMock(return_value={})),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entities = er.async_get(hass)
+    switch = hass.states.get(
+        entities.async_get_entity_id("switch", DOMAIN, "m1_enabled")
+    )
+    rain_delay = hass.states.get(
+        entities.async_get_entity_id("number", DOMAIN, "m1_rain_delay")
+    )
+    assert switch.state == "off"
+    assert "assumed_state" not in switch.attributes
+    assert rain_delay.state == "1.0"
+
+
+async def test_only_a_device_that_left_the_account_can_be_removed(
+    hass: HomeAssistant, entry
+) -> None:
+    """A replaced gateway leaves an orphan device the user must be able to delete.
+
+    Including when the dead gateway is still listed in MySOLEM: it is then still
+    a module of the account, but no controller relays through it anymore, so
+    the integration no longer exposes it.
+    """
+    entry.runtime_data = MagicMock(modules={"m1": MagicMock(), "dead-gw": MagicMock()})
+    entry.runtime_data.relevant_module_ids.return_value = {"m1"}
+    registry = dr.async_get(hass)
+    current = registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "m1")}
+    )
+    still_listed = registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "dead-gw")}
+    )
+    gone = registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "old-gateway")}
+    )
+
+    assert await async_remove_config_entry_device(hass, entry, current) is False
+    assert await async_remove_config_entry_device(hass, entry, still_listed) is True
+    assert await async_remove_config_entry_device(hass, entry, gone) is True

@@ -11,6 +11,7 @@ from .const import DOMAIN, MANUFACTURER
 from .coordinator import SolemConfigEntry, SolemDataUpdateCoordinator
 
 PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
     Platform.SWITCH,
     Platform.VALVE,
     Platform.SELECT,
@@ -54,6 +55,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: SolemConfigEntry) -> boo
     # entity's `DeviceInfo`. Hence both passes live here rather than in
     # `entity.py`; omitting the key in `DeviceInfo` never clears the link.
     device_registry = dr.async_get(hass)
+
+    # Up to 0.9.0b1 a Bluetooth-only controller got a full set of entities, none
+    # of which could read or command it. Drop its device, and with it those
+    # entities, rather than leave them looking alive.
+    for module in coordinator.modules.values():
+        if module.is_bluetooth_only and (
+            device := device_registry.async_get_device_by_identifier(
+                (DOMAIN, module.id), entry.entry_id
+            )
+        ):
+            device_registry.async_update_device(
+                device.id, remove_config_entry_id=entry.entry_id
+            )
+
     device_ids: dict[str, str] = {}
     relevant = coordinator.relevant_module_ids()
     for module in coordinator.modules.values():
@@ -100,6 +115,24 @@ def _async_cleanup_legacy_entities(
             or unique_id in stale_battery
         ):
             entity_registry.async_remove(entity.entity_id)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: SolemConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Let the user delete a device the integration no longer exposes.
+
+    A replaced gateway or controller is a new module with a new id, so the old
+    device would otherwise linger forever with every entity unavailable --
+    whether or not the old module is still listed in MySOLEM, since a gateway
+    no controller relays through anymore stops being exposed either way. One
+    still exposed is refused: setup would only register it again.
+    """
+    exposed = entry.runtime_data.relevant_module_ids()
+    return not any(
+        domain == DOMAIN and module_id in exposed
+        for domain, module_id in device_entry.identifiers
+    )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SolemConfigEntry) -> bool:

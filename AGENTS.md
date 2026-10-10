@@ -36,23 +36,33 @@ maintainable.
   (classifying irrigation controllers via SOLEM's `typeIsWatering` flag),
   polls live state, and owns the **optimistic update + delayed reconcile** used
   to mask slow LoRa downlinks. Also persists the per-station run duration and
-  polls each flow meter (its lifetime counter plus a derived flow rate).
+  polls each flow meter (its lifetime counter plus a derived flow rate), rain
+  gauge (its lifetime total, plus SOLEM's live threshold flag) and on/off rain
+  sensor (its newest 0/1 tick). Bluetooth-only modules are never state-polled
+  and get no entities: the cloud cannot reach them.
 - **`__init__.py`** — entry setup / unload, legacy-entity cleanup, and the
   device pre-registration that also links each controller to its LoRa gateway.
   The link uses `via_device_id`, which needs a device-registry id, so it cannot
-  live in an entity's `device_info`.
+  live in an entity's `device_info`. Also the removal hook that lets a user
+  delete a device the integration no longer exposes.
 - **`entity.py`** — base `CoordinatorEntity` sharing `device_info` across
   platforms.
 - **Platforms** — thin wrappers over coordinator data:
   - `valve.py` — one valve per station (only one is ever open: the hardware
     waters one station at a time).
-  - `switch.py` — the assumed-state *Irrigation enabled* switch; also registers
-    the `run` and `set_enabled` services.
+  - `switch.py` — the *Irrigation enabled* switch (live ON/OFF, assumed-state
+    fallback); also registers the `run` and `set_enabled` services.
   - `select.py` — *Run program* (momentary; resets to a neutral option).
-  - `number.py` — per-station *Run duration* and assumed-state *Rain delay*.
+  - `number.py` — per-station *Run duration* and *Rain delay* (live days
+    left, assumed-state fallback).
   - `button.py` — global *Stop watering*.
-  - `sensor.py` — *Watering station*, *Last communication*, *Battery*, and per
-    flow meter *water used* (cumulative) + *flow rate*.
+  - `sensor.py` — *Watering station*, *Last communication*, *Battery*, per
+    flow meter *water used* (cumulative) + *flow rate*, and per rain gauge
+    *rainfall* (cumulative).
+  - `binary_sensor.py` — per rain gauge *rain threshold* (SOLEM's flag), and
+    per on/off rain sensor its wet/dry state.
+- **`diagnostics.py`** — the raw dump users attach to issues, including a live
+  sample of every input's recent readings.
 - **`config_flow.py`** — setup (email / password / region) with re-auth.
 - **`const.py`** — domain, regions/base URLs, command vocabulary, service names.
 - **`tests/`** — `pytest` suite mirroring the source. Pure logic and entity
@@ -62,10 +72,10 @@ maintainable.
 ## 🔁 Development workflow
 
 1. **Understand** the request and the existing code.
-2. **Implement** following the structure above. Keep assumed-state entities
-   (`enabled`, `rain_delay`) restoring across restarts, and route every manual
-   command through the coordinator's command helpers so the optimistic update
-   and reconcile stay consistent.
+2. **Implement** following the structure above. Keep the assumed-state
+   fallback of `enabled` and `rain_delay` restoring across restarts, and route
+   every manual command through the coordinator's command helpers so the
+   optimistic update and reconcile stay consistent.
 3. **Verify & commit**: you MUST pass the QA checklist in
    [CONTRIBUTING.md](CONTRIBUTING.md).
    - **Conventional Commits**: `feat:`, `fix:`, `refactor:`, `chore:`, `docs:`,

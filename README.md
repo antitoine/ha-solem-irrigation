@@ -19,8 +19,8 @@ with at least one station. Discovery does not care how a controller reaches the
 cloud, so LoRa modules behind an **LR-MB** gateway (LR-IS / LR-IP …) and
 **WiFi** modules (SMART-IS …) are both picked up, with no configuration
 difference. **Bluetooth-only** modules (BL-IP …) are the exception: MySOLEM
-has no live link to them, so the cloud cannot report what they are doing —
-see [limitations](#how-it-works--limitations). Development happens against an
+has no live link to them, so they get no entities — see
+[limitations](#how-it-works--limitations). Development happens against an
 LR-IS behind an LR-MB-10; other models are reported working by their owners. If
 yours is not detected, please
 [open an issue](https://github.com/antitoine/ha-solem-irrigation/issues) with a
@@ -42,13 +42,22 @@ your account:
 | **Number** *Run duration* per station | How long opening that station's valve runs it (minutes). Each station keeps its own. Shown under *Configuration*. |
 | **Select** *Run program* | Pick a stored program to start it now. |
 | **Button** *Stop watering* | Stop anything running — a manual station run or a program. |
-| **Switch** *Irrigation enabled* | Turn the controller on, or off permanently (assumed state). |
-| **Number** *Rain delay* | Disable for N days (0 = enabled) — SOLEM's "Report de pluie". |
+| **Switch** *Irrigation enabled* | Turn the controller on, or off permanently. Also shows an OFF set from MySOLEM or by a rain gauge. |
+| **Number** *Rain delay* | Disable for N days (0 = enabled) — SOLEM's "Report de pluie". Shows the days left, whoever set the delay. |
 | **Sensor** *Watering station* | Name of the station currently watering (idle = none). |
 | **Sensor** *Last communication* | When the module last talked to the cloud — the LoRa radio contact for modules behind a gateway, the module's own connection for the gateway and for WiFi controllers. |
 | **Sensor** *Battery* | Battery indicator (battery-powered modules). |
 | **Sensor** *&lt;meter&gt; water used* | SOLEM's lifetime water counter, for controllers with a flow meter (débitmètre). Add it to the Home Assistant **Water** dashboard. |
 | **Sensor** *&lt;meter&gt; flow rate* | How fast water is flowing right now — non-zero outside a watering run means a leak. |
+| **Binary sensor** *&lt;rain sensor&gt;* | For a controller with an on/off rain sensor (capteur de pluie, e.g. a dry-contact Rain Bird RSD) on its sensor input: on (*wet*) while the sensor reports rain, off (*dry*) once it has dried out. Named after the sensor in MySOLEM. While it is wet, the controller skips the stations set to obey it, but it stays ON, so *Irrigation enabled* does not change. |
+
+A SOLEM **rain gauge** (pluviomètre, e.g. on an LR-MS sensor module) gets its
+own device with:
+
+| Entity | What it does |
+| --- | --- |
+| **Sensor** *&lt;gauge&gt; rainfall* | SOLEM's lifetime rainfall total, in mm. For rain per day or week, point a [`utility_meter`](https://www.home-assistant.io/integrations/utility_meter/) at it. |
+| **Binary sensor** *&lt;gauge&gt; rain threshold* | SOLEM's own "beyond thresholds" flag for the gauge, shown as-is — turns on when the day's rainfall crosses the threshold set in MySOLEM, and has been seen to stay on for days after. Attributes: the daily threshold, the action MySOLEM takes when it is exceeded (e.g. *Off for 2 days*), and when it last fired. To know whether watering is held *right now*, read the controllers' *Irrigation enabled* and *Rain delay* instead. |
 
 ### Actions (services)
 
@@ -62,7 +71,9 @@ you set one); use `solem_irrigation.run` to run for a specific duration, which
 then becomes the new remembered default.
 
 Every module (including the gateway) appears as a Home Assistant **device**;
-controllers are linked to the gateway they communicate through.
+controllers are linked to the gateway they communicate through. A module you
+replace (a new gateway, a swapped controller) comes back as a new device; the
+old one can then be deleted from its device page.
 
 ## Installation
 
@@ -110,20 +121,31 @@ pool integration, not this one.)
 - **Bluetooth-only modules** (BL-IP and the other `bl-*` models) are only ever
   reached by a phone standing next to them; MySOLEM has no gateway or WiFi link
   to them, and its own web app does not even try to read their state. The
-  integration therefore never polls them and logs a warning naming them. For
-  these, a Bluetooth integration such as
+  integration can neither read nor command them, so it gives them no entities
+  (and removes the ones versions up to 0.9.0b1 created) and logs a warning
+  naming them. For these, a Bluetooth integration such as
   [Solem Toolkit](https://github.com/hcraveiro/Home-Assistant-Solem-Toolkit) is
   the realistic route.
-- The *Irrigation enabled* switch and the *Rain delay* number are **assumed
-  state** (the cloud exposes no reliable read-back); their values are restored
-  across restarts. They both drive the controller's on/off, so they can show
-  slightly out of sync with each other.
+- The *Irrigation enabled* switch and the *Rain delay* number follow the
+  ON/OFF status the controller reports, so an OFF set from MySOLEM — by hand,
+  or by a rain gauge crossing its threshold — shows up in Home Assistant too.
+  On a controller whose state carries no such status they fall back to an
+  **assumed state**: the last value set from Home Assistant, restored across
+  restarts.
 - A **flow meter** is a sensor wired to the controller, not a device of its own,
   so its entities live on the controller. *Water used* is SOLEM's own lifetime
   counter, which means restarting Home Assistant never double-counts it. The
   meter only records a reading while water actually flows, so *flow rate* is
   derived from the last minutes of readings; it reads `0` when idle and can be
   briefly unknown in the first minute of a run.
+- The *rain threshold* binary sensor is SOLEM's own flag, shown as-is and not
+  re-derived. It is **not** a "watering is suspended" indicator: on a real
+  LR-MS it stayed on for days after the OFF it triggered had expired, with the
+  controllers back on and watering on schedule. What your controllers do when
+  it fires is a MySOLEM setting (the *threshold_action* attribute); whether
+  they are OFF right now, and for how many more days, shows on each
+  controller's *Irrigation enabled* switch and *Rain delay* number. Use those
+  in automations, and *last_threshold_alert* for when the gauge last fired.
 
 ## Reporting a problem
 
@@ -138,7 +160,9 @@ diagnostics**, then attach the file to your issue.
 
 It contains, for every module on your account (including the ones the
 integration ignores): the raw module record, **every** sensor input — not just
-the ones that currently become entities — and the live state. Credentials,
+the ones that currently become entities — with what it reported over the last
+24 hours, and the live state. If your issue is about a sensor, download it
+shortly after that sensor has measured something (a watering run, a shower). Credentials,
 serial numbers and your location are redacted automatically; module **names**
 are kept, since they are what an issue refers to, so rename them in MySOLEM
 first if any of yours is personal.

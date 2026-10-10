@@ -29,6 +29,36 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "rain_threshold": {
+        "name": "Seuil de pluie {gauge}",
+        "state_attributes": {
+          "daily_threshold": {
+            "name": "Seuil journalier"
+          },
+          "threshold_action": {
+            "name": "Action en cas de dépassement",
+            "state": {
+              "none": "Aucune action",
+              "off_1_day": "OFF 1 jour",
+              "off_2_days": "OFF 2 jours",
+              "off_3_days": "OFF 3 jours"
+            }
+          },
+          "last_threshold_alert": {
+            "name": "Dernière alerte de seuil"
+          }
+        }
+      },
+      "rain_sensor": {
+        "name": "{sensor}",
+        "state_attributes": {
+          "last_measurement": {
+            "name": "Dernière mesure"
+          }
+        }
+      }
+    },
     "switch": {
       "enabled": {
         "name": "Arrosage activé"
@@ -67,6 +97,9 @@
       },
       "water_flow_rate": {
         "name": "Débit {meter}"
+      },
+      "rainfall": {
+        "name": "Pluviométrie {gauge}"
       }
     }
   },

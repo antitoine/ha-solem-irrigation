@@ -5,7 +5,8 @@
   ``solem_irrigation.run`` service.
 * Rain delay (days): 0 = enabled, N>0 = disabled for N days. The visible,
   dashboard-friendly form of ``solem_irrigation.set_enabled``'s ``days``
-  argument, mirroring SOLEM's own "Report de pluie" field.
+  argument, mirroring SOLEM's own "Report de pluie" field. Shows the days left
+  as the cloud reports them, whoever set the delay.
 """
 
 from __future__ import annotations
@@ -88,8 +89,9 @@ class SolemRunDurationNumber(SolemModuleEntity, NumberEntity):
 class SolemRainDelayNumber(SolemModuleEntity, RestoreNumber):
     """Rain delay in days (0 = enabled, N>0 = disabled for N days).
 
-    The cloud has no reliable read-back, so this is an assumed-state value
-    restored across restarts.
+    Follows the days left that the cloud reports. A controller whose state
+    carries no status falls back to an assumed value, the last one set from
+    Home Assistant, restored across restarts.
     """
 
     _attr_translation_key = "rain_delay"
@@ -99,7 +101,6 @@ class SolemRainDelayNumber(SolemModuleEntity, RestoreNumber):
     _attr_native_step = 1
     _attr_native_unit_of_measurement = UnitOfTime.DAYS
     _attr_mode = NumberMode.BOX
-    _attr_assumed_state = True
 
     def __init__(
         self, coordinator: SolemDataUpdateCoordinator, module: SolemModule
@@ -118,15 +119,22 @@ class SolemRainDelayNumber(SolemModuleEntity, RestoreNumber):
             self._value = data.native_value
 
     @property
+    def assumed_state(self) -> bool:
+        """True while the cloud reports no ON/OFF status for this controller."""
+        return self.coordinator.rain_delay_days(self._module.id) is None
+
+    @property
     def native_value(self) -> float:
         """Return the current rain-delay (days)."""
-        return self._value
+        if (days := self.coordinator.rain_delay_days(self._module.id)) is None:
+            return self._value
+        return float(days)
 
     async def async_set_native_value(self, value: float) -> None:
         """Apply a rain delay (or clear it when set to 0)."""
         days = int(value)
-        await self.coordinator.client.async_set_status(
-            self._serial, enabled=days == 0, days=days
+        await self.coordinator.async_command_set_status(
+            self._module, enabled=days == 0, days=days
         )
         self._value = float(days)
         self.async_write_ha_state()

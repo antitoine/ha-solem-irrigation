@@ -29,6 +29,36 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "rain_threshold": {
+        "name": "{gauge} rain threshold",
+        "state_attributes": {
+          "daily_threshold": {
+            "name": "Daily threshold"
+          },
+          "threshold_action": {
+            "name": "Action when exceeded",
+            "state": {
+              "none": "No action",
+              "off_1_day": "Off for 1 day",
+              "off_2_days": "Off for 2 days",
+              "off_3_days": "Off for 3 days"
+            }
+          },
+          "last_threshold_alert": {
+            "name": "Last threshold alert"
+          }
+        }
+      },
+      "rain_sensor": {
+        "name": "{sensor}",
+        "state_attributes": {
+          "last_measurement": {
+            "name": "Last measurement"
+          }
+        }
+      }
+    },
     "switch": {
       "enabled": {
         "name": "Irrigation enabled"
@@ -67,6 +97,9 @@
       },
       "water_flow_rate": {
         "name": "{meter} flow rate"
+      },
+      "rainfall": {
+        "name": "{gauge} rainfall"
       }
     }
   },

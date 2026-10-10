@@ -26,8 +26,12 @@ from custom_components.solem_irrigation.coordinator import (
     SolemFlowMeter,
     SolemModule,
     SolemProgram,
+    SolemRainGauge,
+    SolemRainSensor,
     SolemStation,
     _build_flow_meters,
+    _build_rain_gauges,
+    _build_rain_sensors,
     _compute_flow_rate,
     _find_by_token,
 )
@@ -142,6 +146,26 @@ def test_is_bluetooth_only():
     assert _module().is_bluetooth_only is False
 
 
+def test_a_bluetooth_only_controller_is_not_a_controller():
+    """MySOLEM can neither read nor command it, so it gets no entities."""
+    module = _module(
+        type="bl-ip", raw={"typeIsWatering": True, "isBluetoothOnly": True}
+    )
+    assert module.is_controller is False
+
+
+async def test_relevant_module_ids_leave_out_bluetooth_only_modules(coordinator):
+    gauge = SolemRainGauge(id="r1", name="R", index=1, expression="x", raw={})
+    coordinator.modules = {
+        "b1": _module(id="b1", raw={"typeIsWatering": True, "isBluetoothOnly": True}),
+        "b2": _module(
+            id="b2", raw={"isBluetoothOnly": True}, stations=[], rain_gauges=[gauge]
+        ),
+    }
+    coordinator.data = {}
+    assert coordinator.relevant_module_ids() == set()
+
+
 def test_find_station_and_program():
     module = _module()
     assert module.find_station("Pelouse 1").id == "s1"
@@ -166,6 +190,40 @@ async def test_apply_optimistic_running_station(coordinator):
     coordinator.data = {}
     coordinator.apply_optimistic_running_station("m1", 2)
     assert coordinator.running_station_index("m1") == 2
+
+
+def _watering(**fields) -> dict:
+    return {"m1": {"status": {"watering": fields}}}
+
+
+@pytest.mark.parametrize(
+    ("watering", "enabled", "days"),
+    [
+        # As SOLEM's web app reads it: "OFF 1 jour" (the #8 payload).
+        ({"state": 0, "rainDelay": 1}, False, 1),
+        ({"state": "OFF", "rainDelay": 3}, False, 3),
+        # OFF with no day count, or the 255 the web app treats as permanent.
+        ({"state": 0, "rainDelay": 0}, False, 0),
+        ({"state": 0, "rainDelay": 255}, False, 0),
+        ({"state": 0}, False, 0),
+        ({"state": 0, "rainDelay": "x"}, False, 0),
+        # ``state`` reads 1 both idle and while a station runs.
+        ({"state": 1, "rainDelay": 0, "runningStation": 2}, True, 0),
+        # A stray delay on an ON controller is not a delay.
+        ({"state": 1, "rainDelay": 4}, True, 0),
+    ],
+)
+async def test_reported_watering_status(coordinator, watering, enabled, days):
+    coordinator.data = _watering(**watering)
+    assert coordinator.watering_enabled("m1") is enabled
+    assert coordinator.rain_delay_days("m1") == days
+
+
+async def test_watering_status_unknown_without_a_reported_state(coordinator):
+    coordinator.data = _watering(runningStation=0, rainDelay=2)
+    assert coordinator.watering_enabled("m1") is None
+    assert coordinator.rain_delay_days("m1") is None
+    assert coordinator.watering_enabled("unknown") is None
 
 
 async def test_relevant_module_ids_includes_controllers_and_gateway(coordinator):
@@ -473,6 +531,38 @@ async def test_command_run_station(coordinator):
     await coordinator.async_command_run_station(module, station, 7)
     coordinator.client.async_run_station.assert_awaited_once_with("SER1", "s1", 7)
     assert coordinator.running_station_index("m1") == station.index
+    coordinator.async_schedule_refresh.assert_called_once()
+
+
+async def test_command_set_status_is_reflected_optimistically(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.data = _watering(state=1, rainDelay=0, runningStation=0)
+    coordinator.client.async_set_status = AsyncMock()
+    coordinator.async_schedule_refresh = MagicMock()
+
+    await coordinator.async_command_set_status(module, enabled=False, days=2)
+    coordinator.client.async_set_status.assert_awaited_once_with(
+        "SER1", enabled=False, days=2
+    )
+    assert coordinator.watering_enabled("m1") is False
+    assert coordinator.rain_delay_days("m1") == 2
+    coordinator.async_schedule_refresh.assert_called_once()
+
+    await coordinator.async_command_set_status(module, enabled=True)
+    assert coordinator.watering_enabled("m1") is True
+    assert coordinator.rain_delay_days("m1") == 0
+
+
+async def test_command_set_status_invents_no_status(coordinator):
+    """A controller that never reports a status must not appear to."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.data = {}
+    coordinator.client.async_set_status = AsyncMock()
+    coordinator.async_schedule_refresh = MagicMock()
+    await coordinator.async_command_set_status(module, enabled=False)
+    assert coordinator.watering_enabled("m1") is None
     coordinator.async_schedule_refresh.assert_called_once()
 
 
@@ -810,3 +900,198 @@ async def test_poll_flow_skips_a_meter_whose_value_cannot_be_scaled(coordinator)
     coordinator.modules["m1"].flow_meters = [_flow_meter(expression="2*x")]
     await coordinator._async_update_data()
     assert coordinator.flow_reading("i1") is None
+
+
+# -- rain gauges (#8) -----------------------------------------------------------
+
+# Trimmed from the LR-MS "Rain Sensor" of issue #8.
+RAIN_INPUT = {
+    "id": "r1",
+    "name": "",
+    "getName": "Pluvio Meter",
+    "type": 14,
+    "unit": 13,
+    "index": 1,
+    "expression": "x*0.2794",
+    "typeIsCumulativeData": True,
+    "highThreshold": 2,
+    "isLastMeasureBeyondThresholds": False,
+}
+
+
+def _rain_module(**kwargs) -> SolemModule:
+    base = dict(
+        id="ms",
+        type="lr-ms",
+        display_type="lr-ms",
+        raw={"typeIsWatering": False, "typeIsSensor": True},
+        stations=[],
+        programs=[],
+        rain_gauges=_build_rain_gauges([dict(RAIN_INPUT)]),
+    )
+    base.update(kwargs)
+    return _module(**base)
+
+
+def test_build_rain_gauges_keeps_only_type_14():
+    """Type 2 is the on/off rain *sensor*, a different thing."""
+    gauges = _build_rain_gauges(
+        [dict(RAIN_INPUT), {**RAIN_INPUT, "id": "r2", "type": 2}, dict(FLOW_INPUT)]
+    )
+    assert gauges == [
+        SolemRainGauge(
+            id="r1", name="Pluvio Meter", index=1, expression="x*0.2794", raw=RAIN_INPUT
+        )
+    ]
+
+
+def test_build_rain_gauges_skips_unscalable_expression(caplog):
+    assert _build_rain_gauges([{**RAIN_INPUT, "expression": "Math.pow(x,2)"}]) == []
+    assert "Ignoring SOLEM rain gauge r1" in caplog.text
+
+
+async def test_rain_gauge_module_is_relevant(coordinator):
+    """A standalone LR-MS is not a controller, yet it is ours."""
+    coordinator.modules = {"ms": _rain_module()}
+    coordinator.data = {"ms": {}}
+    assert coordinator.relevant_module_ids() == {"ms"}
+
+
+async def test_poll_scales_the_rain_total_and_keeps_the_live_flags(coordinator):
+    newest = dt_util.utcnow() - timedelta(minutes=3)
+    coordinator.modules = {"ms": _rain_module()}
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = AsyncMock(
+        return_value=[
+            {
+                **RAIN_INPUT,
+                "isLastMeasureBeyondThresholds": True,
+                "computedSensorData": [],
+            }
+        ]
+    )
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        return_value={"value": 100, "timestamp": newest.isoformat()}
+    )
+
+    await coordinator._async_update_data()
+
+    reading = coordinator.rain_reading("r1")
+    assert reading.total == 27.94  # 100 tips x 0.2794 mm
+    assert reading.raw_total == 100
+    assert reading.timestamp == newest
+    # The window carries the flag even with no ticks in it.
+    assert coordinator.input_record("r1")["isLastMeasureBeyondThresholds"] is True
+
+
+async def test_poll_keeps_the_previous_rain_total_when_the_tick_fails(coordinator):
+    coordinator.modules = {"ms": _rain_module()}
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = AsyncMock(return_value=[])
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        return_value={"value": 100, "timestamp": dt_util.utcnow().isoformat()}
+    )
+    await coordinator._async_update_data()
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        side_effect=SolemConnectionError("offline")
+    )
+    await coordinator._async_update_data()
+    assert coordinator.rain_reading("r1").total == 27.94
+    assert coordinator.input_record("r1") is None  # never returned by a window
+
+
+# -- rain sensors (#8) ----------------------------------------------------------
+
+# Trimmed from the dry-contact rain sensor on an LR-IP-ECO, issue #8.
+RAIN_SENSOR_INPUT = {
+    "id": "c1",
+    "name": "Capteur de pluie",
+    "getName": "Capteur de pluie",
+    "type": 2,
+    "unit": 0,
+    "index": 2,
+    "expression": "x",
+    "lowThreshold": 0,
+    "highThreshold": 1,
+    "typeIsTOR": True,
+    "isLastMeasureBeyondThresholds": True,
+}
+# The same controller's turbine, which is not modelled (#12).
+TURBINE_INPUT = {
+    "id": "t1",
+    "name": "Turbine",
+    "type": 33,
+    "unit": 1,
+    "index": 1,
+    "expression": "javascript:if(x<=0){0.0}else{x}",
+}
+
+
+def test_build_rain_sensors_keeps_only_type_2_in_index_order():
+    second = {**RAIN_SENSOR_INPUT, "id": "c2", "name": "", "index": 3}
+    sensors = _build_rain_sensors(
+        [second, dict(TURBINE_INPUT), dict(RAIN_SENSOR_INPUT), dict(RAIN_INPUT)]
+    )
+    assert sensors == [
+        SolemRainSensor(
+            id="c1", name="Capteur de pluie", index=2, raw=RAIN_SENSOR_INPUT
+        ),
+        # A blank label falls back to SOLEM's own.
+        SolemRainSensor(id="c2", name="Capteur de pluie", index=3, raw=second),
+    ]
+
+
+async def test_rain_sensor_module_is_relevant(coordinator):
+    """A sensor module with only a rain sensor is ours, like a gauge's."""
+    sensor = _build_rain_sensors([dict(RAIN_SENSOR_INPUT)])
+    coordinator.modules = {
+        "ms": _module(
+            id="ms",
+            raw={"typeIsWatering": False},
+            stations=[],
+            programs=[],
+            rain_sensors=sensor,
+        )
+    }
+    coordinator.data = {"ms": {}}
+    assert coordinator.relevant_module_ids() == {"ms"}
+
+
+@pytest.mark.parametrize(("value", "wet"), [(1, True), (0, False)])
+async def test_poll_reads_the_rain_sensor_from_its_newest_tick(coordinator, value, wet):
+    """A controller with no meter or gauge still gets its inputs polled."""
+    newest = dt_util.utcnow() - timedelta(hours=12)
+    coordinator.modules = {
+        "m1": _module(rain_sensors=_build_rain_sensors([dict(RAIN_SENSOR_INPUT)]))
+    }
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = AsyncMock(return_value=[])
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        return_value={"value": value, "timestamp": newest.isoformat()}
+    )
+
+    await coordinator._async_update_data()
+
+    reading = coordinator.rain_sensor_reading("c1")
+    assert reading.wet is wet
+    # However old: the last tick stands until the next one.
+    assert reading.timestamp == newest
+    coordinator.client.async_get_last_input_tick.assert_awaited_once_with("c1")
+
+
+async def test_poll_keeps_the_previous_rain_sensor_reading_on_failure(coordinator):
+    coordinator.modules = {
+        "m1": _module(rain_sensors=_build_rain_sensors([dict(RAIN_SENSOR_INPUT)]))
+    }
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = AsyncMock(return_value=[])
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        return_value={"value": 1, "timestamp": dt_util.utcnow().isoformat()}
+    )
+    await coordinator._async_update_data()
+    coordinator.client.async_get_last_input_tick = AsyncMock(
+        side_effect=SolemConnectionError("offline")
+    )
+    await coordinator._async_update_data()
+    assert coordinator.rain_sensor_reading("c1").wet is True
+    assert coordinator.rain_sensor_reading("other") is None
