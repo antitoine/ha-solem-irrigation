@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import aiohttp
@@ -39,11 +39,13 @@ from .const import (
     INPUT_TYPE_FLOW_METER,
     INPUT_TYPE_RAIN_GAUGE,
     INPUT_TYPE_RAIN_SENSOR,
+    INPUT_TYPE_TURBINE,
     LIVE_MODULE_FIELDS,
     RAIN_DELAY_PERMANENT,
     REGION_EUROPE,
     STORAGE_KEY,
     STORAGE_VERSION,
+    TURBINE_IDLE_AFTER,
     WATERING_STATES_OFF,
 )
 
@@ -142,6 +144,33 @@ class SolemRainSensorReading:
     timestamp: datetime
 
 
+@dataclass(slots=True)
+class SolemTurbine:
+    """A turbine flow meter: an input that reports flow, not a running total."""
+
+    id: str
+    name: str
+    index: int
+    unit: int
+    interval: int
+    raw: dict[str, Any]
+
+
+@dataclass(slots=True)
+class SolemTurbineReading:
+    """What a turbine has measured today, and the flow through it right now.
+
+    ``volume_today`` adds up the ticks since local midnight of ``day``, in the
+    turbine's own unit. ``rate`` is its newest tick (unit per minute), and 0 once
+    the water has stopped. ``timestamp`` is that newest tick's time.
+    """
+
+    day: date
+    volume_today: float
+    rate: float
+    timestamp: datetime | None
+
+
 def _scalable_inputs(
     inputs: list[dict[str, Any]], input_type: int, kind: str
 ) -> list[dict[str, Any]]:
@@ -225,6 +254,27 @@ def _build_rain_sensors(inputs: list[dict[str, Any]]) -> list[SolemRainSensor]:
     ]
 
 
+def _build_turbines(inputs: list[dict[str, Any]]) -> list[SolemTurbine]:
+    """Pick the turbine flow meters out of a module's inputs, in index order.
+
+    No expression check, unlike the counters: the cloud applies it to the
+    windowed ticks a turbine is read from, and its JavaScript curve is beyond
+    :func:`apply_expression` anyway.
+    """
+    return [
+        SolemTurbine(
+            id=record["id"],
+            name=_input_name(record, "Turbine"),
+            index=int(record.get("index", 0) or 0),
+            unit=int(record.get("unit", 0) or 0),
+            interval=int(record.get("interval", 0) or 0) or DEFAULT_INPUT_INTERVAL,
+            raw=record,
+        )
+        for record in sorted(inputs, key=lambda r: int(r.get("index", 0) or 0))
+        if record.get("type") == INPUT_TYPE_TURBINE and record.get("id")
+    ]
+
+
 def _usable_ticks(record: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the ticks of ``record`` that a rate may be derived from.
 
@@ -274,6 +324,54 @@ def _compute_flow_rate(
     return round(delta / elapsed, 2)
 
 
+def _compute_turbine_reading(
+    record: dict[str, Any],
+    now: datetime,
+    day_start: datetime,
+    interval: int,
+    previous: SolemTurbineReading | None,
+) -> SolemTurbineReading:
+    """Add up today's turbine ticks and read the current flow off the newest one.
+
+    ``day_start`` is local midnight, in local time: its date is the day counted.
+    Each tick is the flow over one ``interval``, in litres per minute, so it
+    stands for ``value * interval`` litres. MySOLEM adds them up the same way,
+    without filling the odd missing minute. Only ``interval`` 1 has been checked
+    against MySOLEM's figures.
+
+    The day's total is rebuilt from the window on every poll, so no tick is ever
+    counted twice and a restart loses nothing. Within a day it never goes down,
+    though: Home Assistant would book the dip as negative consumption, and a
+    window that comes back short must not take back litres already reported.
+    """
+    ticks = [
+        (timestamp, float(tick["value"]))
+        for tick in _usable_ticks(record)
+        if (timestamp := dt_util.parse_datetime(tick["tickTimestamp"])) is not None
+    ]
+    day = day_start.date()
+    volume = round(
+        sum(value * interval for timestamp, value in ticks if timestamp >= day_start),
+        2,
+    )
+    if previous is not None and previous.day == day:
+        volume = max(volume, previous.volume_today)
+    if not ticks:
+        return SolemTurbineReading(
+            day=day,
+            volume_today=volume,
+            rate=0.0,
+            timestamp=previous.timestamp if previous else None,
+        )
+    timestamp, value = max(ticks, key=lambda tick: tick[0])
+    # The 0 tick a turbine sends when the water stops normally ends the flow;
+    # the age check only covers that tick never arriving.
+    rate = value if now - timestamp <= TURBINE_IDLE_AFTER else 0.0
+    return SolemTurbineReading(
+        day=day, volume_today=volume, rate=round(rate, 2), timestamp=timestamp
+    )
+
+
 def _find_by_token(
     items: list[SolemStation] | list[SolemProgram], token: str | int
 ) -> Any:
@@ -310,6 +408,7 @@ class SolemModule:
     flow_meters: list[SolemFlowMeter] = field(default_factory=list)
     rain_gauges: list[SolemRainGauge] = field(default_factory=list)
     rain_sensors: list[SolemRainSensor] = field(default_factory=list)
+    turbines: list[SolemTurbine] = field(default_factory=list)
     # Every input as the cloud returned it, including the ones
     # ``_build_*`` helpers drop. Nothing reads this at runtime; it exists so
     # diagnostics can show a sensor the integration does not model yet (a
@@ -335,6 +434,13 @@ class SolemModule:
             bool(self.stations)
             and bool(self.raw.get("typeIsWatering"))
             and not self.is_bluetooth_only
+        )
+
+    @property
+    def has_modelled_inputs(self) -> bool:
+        """True when any of the module's sensors becomes an entity."""
+        return bool(
+            self.flow_meters or self.rain_gauges or self.rain_sensors or self.turbines
         )
 
     @property
@@ -393,6 +499,8 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         self.rain: dict[str, SolemRainReading] = {}
         # Latest rain-sensor reading, keyed by **sensor (input) id**.
         self.rain_sensor_readings: dict[str, SolemRainSensorReading] = {}
+        # Latest turbine reading, keyed by **turbine (input) id**.
+        self.turbine_readings: dict[str, SolemTurbineReading] = {}
         # Each modelled input's record as the sensor-data window last returned
         # it, keyed by **input id**. It carries SOLEM's live flags (threshold
         # exceeded, faulty probe), which the module page only snapshots at setup.
@@ -505,6 +613,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                     flow_meters=_build_flow_meters(inputs),
                     rain_gauges=_build_rain_gauges(inputs),
                     rain_sensors=_build_rain_sensors(inputs),
+                    turbines=_build_turbines(inputs),
                     raw_inputs=inputs,
                 )
                 modules[module_id] = module
@@ -514,7 +623,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 _LOGGER.debug(
                     "Discovered module %s: name=%s type=%s outputs=%d "
                     "programs=%d inputs=%d input_types=%s flow_meters=%d "
-                    "rain_gauges=%d rain_sensors=%d controller=%s",
+                    "rain_gauges=%d rain_sensors=%d turbines=%d controller=%s",
                     module_id,
                     module.name,
                     module.type,
@@ -531,6 +640,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                     len(module.flow_meters),
                     len(module.rain_gauges),
                     len(module.rain_sensors),
+                    len(module.turbines),
                     module.is_controller,
                 )
             self.modules = modules
@@ -589,8 +699,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         # Sensors live on their own endpoints. A failure here never fails the
         # cycle: the watering state above stays the sole authority.
         for module_id in self.relevant_module_ids():
-            module = self.modules[module_id]
-            if module.flow_meters or module.rain_gauges or module.rain_sensors:
+            if self.modules[module_id].has_modelled_inputs:
                 await self._async_poll_inputs(module_id)
         return states
 
@@ -620,20 +729,26 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 )
 
     async def _async_poll_inputs(self, module_id: str) -> None:
-        """Refresh every flow-meter, rain-gauge and rain-sensor reading on a module.
+        """Refresh every sensor reading on a module.
 
         Each cumulative total comes from the input's newest tick (which the
         cloud always answers with, however old it is), while a flow rate is
-        derived from a short window of ticks. On failure the previous reading is
+        derived from a short window of ticks. A turbine has no total to read,
+        so for a module carrying one the window reaches back to local midnight
+        and the day's ticks are added up. On failure the previous reading is
         kept: blanking a cumulative sensor punches a hole in long-term
         statistics.
         """
         module = self.modules[module_id]
         now = dt_util.utcnow()
+        day_start = dt_util.start_of_local_day(dt_util.as_local(now))
+        start = now - FLOW_WINDOW
+        if module.turbines:
+            start = min(start, dt_util.as_utc(day_start))
         try:
             records = await self.client.async_get_module_sensor_data(
                 module_id,
-                (now - FLOW_WINDOW).isoformat().replace("+00:00", "Z"),
+                start.isoformat().replace("+00:00", "Z"),
                 now.isoformat().replace("+00:00", "Z"),
             )
         except SolemAuthError as err:
@@ -678,6 +793,19 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 wet=raw_value != 0, timestamp=timestamp
             )
 
+        for turbine in module.turbines:
+            # No record means the window fetch failed. Keep the last reading
+            # rather than let today's total drop to nothing.
+            if (record := by_id.get(turbine.id)) is None:
+                continue
+            self.turbine_readings[turbine.id] = _compute_turbine_reading(
+                record,
+                now,
+                day_start,
+                turbine.interval,
+                self.turbine_readings.get(turbine.id),
+            )
+
     async def _async_last_tick(
         self, input_id: str, expression: str
     ) -> tuple[float, float, datetime] | None:
@@ -714,6 +842,10 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         """Return the latest reading for a rain sensor, if one has arrived."""
         return self.rain_sensor_readings.get(sensor_id)
 
+    def turbine_reading(self, turbine_id: str) -> SolemTurbineReading | None:
+        """Return the latest reading for a turbine, if one has been computed."""
+        return self.turbine_readings.get(turbine_id)
+
     def input_record(self, input_id: str) -> dict[str, Any] | None:
         """Return an input's record as last polled, if it has been."""
         return self.input_records.get(input_id)
@@ -730,8 +862,8 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         also sells sensors as modules of their own, which are not a watering
         type, so those are admitted on the strength of what they measure: a flow
         meter (lr-fl and friends -- untested, as I only have the
-        controller-attached topology), a rain gauge (the LR-MS, #8) or a rain
-        sensor.
+        controller-attached topology), a rain gauge (the LR-MS, #8), a rain
+        sensor or a turbine.
 
         Nothing Bluetooth-only is owned: the cloud cannot reach it.
         """
@@ -740,7 +872,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
             for m in self.modules.values()
             if m.is_controller
             or (
-                (m.flow_meters or m.rain_gauges or m.rain_sensors)
+                m.has_modelled_inputs
                 and not m.raw.get("typeIsPoolProduct")
                 and not m.is_bluetooth_only
             )
