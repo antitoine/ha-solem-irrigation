@@ -52,6 +52,8 @@ your account:
 | **Sensor** *Battery* | Battery indicator (battery-powered modules). |
 | **Sensor** *&lt;meter&gt; water used* | SOLEM's lifetime water counter, for controllers with a flow meter (débitmètre). Add it to the Home Assistant **Water** dashboard. |
 | **Sensor** *&lt;meter&gt; flow rate* | How fast water is flowing right now — non-zero outside a watering run means a leak. |
+| **Sensor** *&lt;turbine&gt; water used today* | For a controller with a turbine flow meter (débitmètre turbine, e.g. on an LR-IP-ECO): the water through it since midnight, in litres, matching MySOLEM's daily figure. Starts again from 0 every day; add it to the Home Assistant **Water** dashboard as it is. |
+| **Sensor** *&lt;turbine&gt; flow rate* | How fast water is flowing through the turbine right now, in L/min. |
 | **Binary sensor** *&lt;rain sensor&gt;* | For a controller with an on/off rain sensor (capteur de pluie, e.g. a dry-contact Rain Bird RSD) on its sensor input: on (*wet*) while the sensor reports rain, off (*dry*) once it has dried out. Named after the sensor in MySOLEM. While it is wet, the controller skips the stations set to obey it, but it stays ON, so *Irrigation enabled* does not change. |
 
 A SOLEM **rain gauge** (pluviomètre, e.g. on an LR-MS sensor module) gets its
@@ -149,6 +151,17 @@ pool integration, not this one.)
   meter only records a reading while water actually flows, so *flow rate* is
   derived from the last minutes of readings; it reads `0` when idle and can be
   briefly unknown in the first minute of a run.
+- A **turbine** flow meter (an LR-IP-ECO's) keeps no running total: it reports
+  the flow, once a minute while water runs, and a `0` when it stops. So its
+  *water used today* adds up the day's readings, as MySOLEM's own charts do,
+  and starts again at midnight (Home Assistant's time zone). Restarting Home
+  Assistant does not lose or double-count anything, as the day is re-added
+  from MySOLEM on every poll. A reading that reaches MySOLEM after midnight but
+  belongs to the minute before is missed from the previous day. For a running
+  total that never resets, point a
+  [`utility_meter`](https://www.home-assistant.io/integrations/utility_meter/)
+  without a `cycle` at it. *Flow rate* is the latest reading, so it lags the
+  real flow by the few minutes MySOLEM takes to receive it.
 - The *rain threshold* binary sensor is SOLEM's own flag, shown as-is and not
   re-derived. It is **not** a "watering is suspended" indicator: on a real
   LR-MS it stayed on for days after the OFF it triggered had expired, with the

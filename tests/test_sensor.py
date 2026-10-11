@@ -1,5 +1,6 @@
 """Tests for the SOLEM sensors."""
 
+from datetime import date, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,12 +20,16 @@ from custom_components.solem_irrigation.coordinator import (
     SolemRainGauge,
     SolemRainReading,
     SolemStation,
+    SolemTurbine,
+    SolemTurbineReading,
 )
 from custom_components.solem_irrigation.sensor import (
     SolemBatterySensor,
     SolemLastCommunicationSensor,
     SolemRainfallSensor,
     SolemRunningStationSensor,
+    SolemTurbineFlowRateSensor,
+    SolemTurbineWaterUsedTodaySensor,
     SolemWaterFlowRateSensor,
     SolemWaterUsedSensor,
     async_setup_entry,
@@ -382,11 +387,107 @@ def test_flow_sensor_unique_ids_survive_legacy_pruning(coordinator, module):
     ids = [
         SolemWaterUsedSensor(coordinator, module, _meter()).unique_id,
         SolemWaterFlowRateSensor(coordinator, module, _meter()).unique_id,
+        SolemTurbineWaterUsedTodaySensor(coordinator, module, TURBINE).unique_id,
+        SolemTurbineFlowRateSensor(coordinator, module, TURBINE).unique_id,
     ]
     for unique_id in ids:
         assert "_station_" not in unique_id
         assert "_program_" not in unique_id
         assert not unique_id.endswith(("_run_duration", "_manual_run"))
+
+
+# -- turbine ------------------------------------------------------------------
+
+TURBINE = SolemTurbine(
+    id="t1", name="Turbine", index=1, unit=1, interval=1, raw={"id": "t1"}
+)
+TURBINE_READING = SolemTurbineReading(
+    day=date(2026, 10, 11),
+    volume_today=57.75,
+    rate=6.43,
+    timestamp=dt_util.parse_datetime("2026-10-11T17:42:00+00:00"),
+)
+
+
+def test_turbine_water_used_today(coordinator, module):
+    coordinator.turbine_reading.return_value = TURBINE_READING
+    coordinator.input_record.return_value = {"hasFaultyProbe": False}
+    sensor = SolemTurbineWaterUsedTodaySensor(coordinator, module, TURBINE)
+
+    assert sensor.unique_id == "m1_water_used_today_t1"
+    assert sensor.translation_key == "water_used_today"
+    assert sensor.translation_placeholders == {"meter": "Turbine"}
+    assert sensor.native_value == 57.75
+    assert sensor.device_class == SensorDeviceClass.WATER
+    # A daily total, not a lifetime counter: ``last_reset`` marks each day.
+    assert sensor.state_class == SensorStateClass.TOTAL
+    assert sensor.last_reset == datetime(
+        2026, 10, 11, tzinfo=dt_util.get_default_time_zone()
+    )
+    assert sensor.native_unit_of_measurement == UnitOfVolume.LITERS
+    assert sensor.extra_state_attributes == {
+        "turbine_id": "t1",
+        "last_measurement": "2026-10-11T17:42:00+00:00",
+        "faulty_probe": False,
+    }
+
+
+def test_turbine_flow_rate(coordinator, module):
+    coordinator.turbine_reading.return_value = TURBINE_READING
+    coordinator.input_record.return_value = None
+    sensor = SolemTurbineFlowRateSensor(coordinator, module, TURBINE)
+
+    assert sensor.unique_id == "m1_water_flow_rate_t1"
+    assert sensor.translation_key == "water_flow_rate"
+    assert sensor.native_value == 6.43
+    assert sensor.device_class == SensorDeviceClass.VOLUME_FLOW_RATE
+    assert sensor.state_class == SensorStateClass.MEASUREMENT
+    assert sensor.native_unit_of_measurement == UnitOfVolumeFlowRate.LITERS_PER_MINUTE
+    assert sensor.extra_state_attributes["faulty_probe"] is None
+
+
+def test_turbine_sensors_unknown_before_the_first_window(coordinator, module):
+    coordinator.turbine_reading.return_value = None
+    used = SolemTurbineWaterUsedTodaySensor(coordinator, module, TURBINE)
+    rate = SolemTurbineFlowRateSensor(coordinator, module, TURBINE)
+    assert used.native_value is None
+    assert used.last_reset is None
+    assert used.extra_state_attributes is None
+    assert rate.native_value is None
+
+
+def test_turbine_without_a_tick_yet_has_no_measurement_time(coordinator, module):
+    coordinator.turbine_reading.return_value = SolemTurbineReading(
+        day=date(2026, 10, 11), volume_today=0.0, rate=0.0, timestamp=None
+    )
+    coordinator.input_record.return_value = None
+    sensor = SolemTurbineFlowRateSensor(coordinator, module, TURBINE)
+    assert sensor.native_value == 0.0
+    assert sensor.extra_state_attributes["last_measurement"] is None
+
+
+def test_turbine_sensors_in_gallons(coordinator, module):
+    turbine = SolemTurbine(
+        id="t1", name="Turbine", index=1, unit=3, interval=1, raw={"id": "t1"}
+    )
+    used = SolemTurbineWaterUsedTodaySensor(coordinator, module, turbine)
+    rate = SolemTurbineFlowRateSensor(coordinator, module, turbine)
+    assert used.native_unit_of_measurement == UnitOfVolume.GALLONS
+    assert rate.native_unit_of_measurement == UnitOfVolumeFlowRate.GALLONS_PER_MINUTE
+
+
+async def test_async_setup_entry_adds_turbine_sensors(coordinator, module):
+    module.turbines = [TURBINE]
+    coordinator.relevant_module_ids.return_value = {"m1"}
+    entry = MagicMock()
+    entry.runtime_data = coordinator
+    added: list = []
+
+    await async_setup_entry(MagicMock(), entry, added.extend)
+
+    assert {"m1_water_used_today_t1", "m1_water_flow_rate_t1"} <= {
+        s.unique_id for s in added
+    }
 
 
 # -- setup --------------------------------------------------------------------

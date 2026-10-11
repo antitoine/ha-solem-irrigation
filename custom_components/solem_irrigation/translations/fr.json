@@ -98,6 +98,9 @@
       "water_flow_rate": {
         "name": "Débit {meter}"
       },
+      "water_used_today": {
+        "name": "Volume d'eau {meter} aujourd'hui"
+      },
       "rainfall": {
         "name": "Pluviométrie {gauge}"
       }

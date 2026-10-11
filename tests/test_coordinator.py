@@ -1,8 +1,9 @@
 """Tests for the SOLEM data update coordinator."""
 
 import asyncio
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from homeassistant.exceptions import (
@@ -35,10 +36,14 @@ from custom_components.solem_irrigation.coordinator import (
     SolemRainGauge,
     SolemRainSensor,
     SolemStation,
+    SolemTurbine,
+    SolemTurbineReading,
     _build_flow_meters,
     _build_rain_gauges,
     _build_rain_sensors,
+    _build_turbines,
     _compute_flow_rate,
+    _compute_turbine_reading,
     _find_by_token,
 )
 
@@ -1144,7 +1149,7 @@ RAIN_SENSOR_INPUT = {
     "typeIsTOR": True,
     "isLastMeasureBeyondThresholds": True,
 }
-# The same controller's turbine, which is not modelled (#12).
+# The same controller's turbine (#12).
 TURBINE_INPUT = {
     "id": "t1",
     "name": "Turbine",
@@ -1223,6 +1228,291 @@ async def test_poll_keeps_the_previous_rain_sensor_reading_on_failure(coordinato
     await coordinator._async_update_data()
     assert coordinator.rain_sensor_reading("c1").wet is True
     assert coordinator.rain_sensor_reading("other") is None
+
+
+# -- turbines (#12) -----------------------------------------------------------
+
+# The #12 day on an LR-IP-ECO, as its window returned it (litres per minute):
+# two one-minute bursts in the early hours, then a watering run ending on the 0
+# tick a turbine sends when the water stops. MySOLEM charted 4.1, 7.2 and 46.5 L.
+TURBINE_TICKS = [
+    ("2026-10-11T01:01:00.000Z", 4.058388237899999),
+    ("2026-10-11T01:02:00.000Z", 0),
+    ("2026-10-11T05:01:00.000Z", 7.237591665819),
+    ("2026-10-11T05:02:00.000Z", 0),
+    ("2026-10-11T17:34:00.000Z", 2.185219681484),
+    # No 17:35 tick: MySOLEM leaves the gap unfilled, and so does the sum.
+    ("2026-10-11T17:36:00.000Z", 8.0357307584),
+    ("2026-10-11T17:37:00.000Z", 2.427487961971),
+    ("2026-10-11T17:38:00.000Z", 7.2019639999999985),
+    ("2026-10-11T17:39:00.000Z", 3.495349442475),
+    ("2026-10-11T17:40:00.000Z", 8.1746021056),
+    ("2026-10-11T17:41:00.000Z", 8.500848801983999),
+    ("2026-10-11T17:42:00.000Z", 6.431647349003999),
+    ("2026-10-11T17:43:00.000Z", 0),
+]
+
+# Local midnight of 2026-10-11 in Paris (CEST, UTC+2), as the coordinator
+# passes it: in local time, so its date is the day being counted.
+PARIS_DAY_START = datetime(2026, 10, 11, tzinfo=ZoneInfo("Europe/Paris"))
+
+
+def _turbine_record(ticks=TURBINE_TICKS, **extra) -> dict:
+    return {
+        "id": "t1",
+        "type": 33,
+        "computedSensorData": [
+            {"tickTimestamp": timestamp, "value": value, **extra}
+            for timestamp, value in ticks
+        ],
+    }
+
+
+def _at(timestamp: str) -> datetime:
+    return dt_util.parse_datetime(timestamp)
+
+
+def test_build_turbines_keeps_only_type_33_in_index_order():
+    second = {**TURBINE_INPUT, "id": "t2", "name": "", "index": 3}
+    turbines = _build_turbines(
+        [second, dict(RAIN_SENSOR_INPUT), dict(TURBINE_INPUT), dict(FLOW_INPUT)]
+    )
+    assert turbines == [
+        # No ``interval`` on the record: one tick a minute, as on the real one.
+        SolemTurbine(
+            id="t1", name="Turbine", index=1, unit=1, interval=1, raw=TURBINE_INPUT
+        ),
+        # Neither a label nor SOLEM's own: a generic name.
+        SolemTurbine(
+            id="t2", name="Turbine 3", index=3, unit=1, interval=1, raw=second
+        ),
+    ]
+
+
+def test_turbine_day_total_matches_mysolem():
+    """4.1 + 7.2 + 46.5 L on MySOLEM's chart, to the rounding."""
+    reading = _compute_turbine_reading(
+        _turbine_record(), _at("2026-10-11T17:50:00Z"), PARIS_DAY_START, 1, None
+    )
+    assert reading == SolemTurbineReading(
+        day=date(2026, 10, 11),
+        volume_today=57.75,
+        rate=0.0,
+        timestamp=_at("2026-10-11T17:43:00Z"),
+    )
+
+
+def test_turbine_rate_is_the_newest_tick_while_water_flows():
+    ticks = [t for t in TURBINE_TICKS if t[0] < "2026-10-11T17:43"]
+    reading = _compute_turbine_reading(
+        _turbine_record(ticks), _at("2026-10-11T17:45:00Z"), PARIS_DAY_START, 1, None
+    )
+    assert reading.rate == 6.43
+    assert reading.timestamp == _at("2026-10-11T17:42:00Z")
+
+
+def test_turbine_rate_falls_to_zero_when_the_stop_tick_never_arrives():
+    ticks = [t for t in TURBINE_TICKS if t[0] < "2026-10-11T17:43"]
+    reading = _compute_turbine_reading(
+        _turbine_record(ticks), _at("2026-10-11T17:53:00Z"), PARIS_DAY_START, 1, None
+    )
+    assert reading.rate == 0.0
+    # The volume already through is still counted.
+    assert reading.volume_today == 57.75
+
+
+def test_turbine_counts_only_todays_ticks_but_reads_the_rate_from_any():
+    """Ticks before local midnight are yesterday's, yet still say water flows."""
+    reading = _compute_turbine_reading(
+        _turbine_record([("2026-10-10T21:59:00.000Z", 5.0)]),
+        _at("2026-10-10T22:01:00Z"),
+        PARIS_DAY_START,
+        1,
+        None,
+    )
+    assert reading.volume_today == 0.0
+    assert reading.rate == 5.0
+
+
+def test_turbine_skips_interpolated_and_continuity_ticks():
+    for extra in ({"interpolated": True}, {"flag": "lastTickBeforeStartDate"}):
+        reading = _compute_turbine_reading(
+            _turbine_record(**extra),
+            _at("2026-10-11T17:50:00Z"),
+            PARIS_DAY_START,
+            1,
+            None,
+        )
+        assert reading.volume_today == 0.0
+        assert reading.timestamp is None
+
+
+def test_turbine_skips_ticks_with_an_unparseable_timestamp():
+    reading = _compute_turbine_reading(
+        _turbine_record([("not a date", 9.0), *TURBINE_TICKS]),
+        _at("2026-10-11T17:50:00Z"),
+        PARIS_DAY_START,
+        1,
+        None,
+    )
+    assert reading.volume_today == 57.75
+
+
+def test_turbine_volume_scales_with_the_tick_interval():
+    reading = _compute_turbine_reading(
+        _turbine_record(), _at("2026-10-11T17:50:00Z"), PARIS_DAY_START, 2, None
+    )
+    assert reading.volume_today == 115.5
+
+
+def test_turbine_day_total_never_drops_within_a_day():
+    """A short window must not take back litres already reported."""
+    previous = SolemTurbineReading(
+        day=date(2026, 10, 11),
+        volume_today=60.0,
+        rate=0.0,
+        timestamp=_at("2026-10-11T17:43:00Z"),
+    )
+    reading = _compute_turbine_reading(
+        _turbine_record(), _at("2026-10-11T17:55:00Z"), PARIS_DAY_START, 1, previous
+    )
+    assert reading.volume_today == 60.0
+
+
+def test_turbine_day_total_starts_again_on_a_new_day():
+    previous = SolemTurbineReading(
+        day=date(2026, 10, 10),
+        volume_today=60.0,
+        rate=0.0,
+        timestamp=_at("2026-10-10T17:43:00Z"),
+    )
+    reading = _compute_turbine_reading(
+        _turbine_record([]), _at("2026-10-10T22:05:00Z"), PARIS_DAY_START, 1, previous
+    )
+    assert reading.day == date(2026, 10, 11)
+    assert reading.volume_today == 0.0
+    assert reading.rate == 0.0
+    # Its newest tick is still the one from yesterday.
+    assert reading.timestamp == previous.timestamp
+
+
+def _turbine_coordinator(coordinator, window):
+    module = _module(turbines=_build_turbines([dict(TURBINE_INPUT)]))
+    coordinator.modules = {"m1": module}
+    coordinator.data = {"m1": {}}
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = window
+    coordinator.client.async_get_last_input_tick = AsyncMock(return_value={})
+    return module
+
+
+async def test_poll_reaches_back_to_local_midnight_for_a_turbine(
+    hass, coordinator, freezer
+):
+    await hass.config.async_set_time_zone("Europe/Paris")
+    freezer.move_to("2026-10-11T17:50:00+00:00")
+    window = AsyncMock(return_value=[_turbine_record()])
+    _turbine_coordinator(coordinator, window)
+
+    await coordinator._async_update_data()
+
+    window.assert_awaited_once_with(
+        "m1", "2026-10-10T22:00:00Z", "2026-10-11T17:50:00Z"
+    )
+    assert coordinator.turbine_reading("t1").volume_today == 57.75
+    # The turbine's raw newest tick is never asked for.
+    coordinator.client.async_get_last_input_tick.assert_not_awaited()
+
+
+async def test_poll_counts_the_25_hour_day_the_clocks_go_back(
+    hass, coordinator, freezer
+):
+    """2026-10-25 in Paris starts at 22:00 UTC the day before and lasts 25 h."""
+    await hass.config.async_set_time_zone("Europe/Paris")
+    freezer.move_to("2026-10-25T22:30:00+00:00")
+    window = AsyncMock(
+        return_value=[
+            _turbine_record(
+                [
+                    ("2026-10-24T21:55:00.000Z", 1.0),  # 23:55 on the 24th
+                    ("2026-10-24T22:05:00.000Z", 2.0),  # 00:05 CEST
+                    ("2026-10-25T00:30:00.000Z", 4.0),  # 02:30 CEST
+                    ("2026-10-25T01:30:00.000Z", 8.0),  # 02:30 CET
+                    ("2026-10-25T22:20:00.000Z", 16.0),  # 23:20 CET
+                ]
+            )
+        ]
+    )
+    _turbine_coordinator(coordinator, window)
+
+    await coordinator._async_update_data()
+
+    assert window.await_args.args[1] == "2026-10-24T22:00:00Z"
+    reading = coordinator.turbine_reading("t1")
+    assert reading.day == date(2026, 10, 25)
+    assert reading.volume_today == 30.0
+
+
+async def test_poll_keeps_the_turbine_reading_when_the_window_fails(
+    hass, coordinator, freezer
+):
+    await hass.config.async_set_time_zone("Europe/Paris")
+    freezer.move_to("2026-10-11T17:50:00+00:00")
+    _turbine_coordinator(coordinator, AsyncMock(return_value=[_turbine_record()]))
+    await coordinator._async_update_data()
+
+    coordinator.client.async_get_module_sensor_data = AsyncMock(
+        side_effect=SolemConnectionError("offline")
+    )
+    await coordinator._async_update_data()
+
+    assert coordinator.turbine_reading("t1").volume_today == 57.75
+    assert coordinator.turbine_reading("other") is None
+
+
+async def test_poll_window_stays_short_without_a_turbine(coordinator, freezer):
+    """Only a turbine needs the whole day; everything else reads 15 minutes."""
+    freezer.move_to("2026-10-11T17:50:00+00:00")
+    _flow_coordinator(coordinator)
+    await coordinator._async_update_data()
+    coordinator.client.async_get_module_sensor_data.assert_awaited_once_with(
+        "m1", "2026-10-11T17:35:00Z", "2026-10-11T17:50:00Z"
+    )
+
+
+async def test_turbine_module_is_relevant(coordinator):
+    """A non-watering module carrying a turbine is ours, like a meter's."""
+    coordinator.modules = {
+        "t": _module(
+            id="t",
+            raw={"typeIsWatering": False},
+            stations=[],
+            programs=[],
+            turbines=_build_turbines([dict(TURBINE_INPUT)]),
+        )
+    }
+    coordinator.data = {"t": {}}
+    assert coordinator.relevant_module_ids() == {"t"}
+
+
+async def test_setup_builds_turbines(coordinator):
+    coordinator.client.async_login = AsyncMock(return_value="uid")
+    coordinator.client.async_get_module_ids = AsyncMock(return_value=["m1"])
+    coordinator.client.async_get_module_page = AsyncMock(
+        return_value=(
+            {
+                "name": "Ceyreste",
+                "type": "lr-ip-eco",
+                "typeIsWatering": True,
+                "outputs": [{"id": "o1", "name": "Potager", "index": 1}],
+            },
+            [dict(TURBINE_INPUT), dict(RAIN_SENSOR_INPUT)],
+        )
+    )
+
+    await coordinator.async_setup()
+
+    assert [t.id for t in coordinator.modules["m1"].turbines] == ["t1"]
 
 
 # -- agricultural (LR-AG) modules ---------------------------------------------

@@ -7,6 +7,7 @@ worth guarding are opposites: nothing sensitive may survive, and everything
 
 import json
 import re
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,6 +24,8 @@ from custom_components.solem_irrigation.coordinator import (
     SolemRainSensor,
     SolemRainSensorReading,
     SolemStation,
+    SolemTurbine,
+    SolemTurbineReading,
 )
 from custom_components.solem_irrigation.diagnostics import (
     async_get_config_entry_diagnostics,
@@ -86,6 +89,9 @@ def module() -> SolemModule:
         rain_sensors=[
             SolemRainSensor(id="i2", name="Capteur de pluie", index=2, raw={})
         ],
+        turbines=[
+            SolemTurbine(id="i3", name="Turbine", index=3, unit=1, interval=1, raw={})
+        ],
         # Type 0 is an empty input slot, as on a real LR-IP-ECO.
         raw_inputs=[dict(FLOW_INPUT), dict(RAIN_INPUT), {"id": "i0", "type": 0}],
     )
@@ -115,6 +121,14 @@ def entry(module) -> MagicMock:
     coordinator.rain_sensor_readings = {
         "i2": SolemRainSensorReading(
             wet=True, timestamp=dt_util.parse_datetime("2026-09-21T05:55:00+00:00")
+        )
+    }
+    coordinator.turbine_readings = {
+        "i3": SolemTurbineReading(
+            day=date(2026, 9, 21),
+            volume_today=46.45,
+            rate=0.0,
+            timestamp=dt_util.parse_datetime("2026-09-21T05:43:00+00:00"),
         )
     }
     coordinator.client = MagicMock()
@@ -272,6 +286,22 @@ async def test_diagnostics_includes_rain_sensors(hass, entry):
     ]
     assert result["rain_sensor_readings"] == {
         "i2": {"wet": True, "timestamp": "2026-09-21T05:55:00+00:00"}
+    }
+
+
+async def test_diagnostics_includes_turbines(hass, entry):
+    result = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert result["modules"]["m1"]["turbines"] == [
+        {"name": "Turbine", "index": 3, "unit": 1, "interval": 1}
+    ]
+    assert result["turbine_readings"] == {
+        "i3": {
+            "day": "2026-09-21",
+            "volume_today": 46.45,
+            "rate": 0.0,
+            "timestamp": "2026-09-21T05:43:00+00:00",
+        }
     }
 
 

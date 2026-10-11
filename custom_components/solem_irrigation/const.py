@@ -95,6 +95,15 @@ INPUT_TYPE_RAIN_GAUGE = 14
 # and 0 once it has dried out (#8). MySOLEM plots it as a step chart; a
 # controller then skips the stations set to obey it.
 INPUT_TYPE_RAIN_SENSOR = 2
+# The turbine on an LR-IP-ECO ("Débitmètre - Turbine", in the bundle's
+# ``otherSensors``). Unlike type 1 it is not a counter
+# (``typeIsCumulativeData: false``): each tick is the flow over its interval,
+# in litres per minute once the input's expression is applied, and MySOLEM's
+# own volume chart just adds the ticks up. Checked against a real run in #12:
+# eight ticks summing to 46.45 L for MySOLEM's 46.5 L bar. The expression maps
+# a station's raw ``nominalDebit`` of 2325 to 4.0 L/min, the 0.24 m³/h shown on
+# the MySOLEM screen. A tick of 0 follows the last one with water.
+INPUT_TYPE_TURBINE = 33
 
 # What MySOLEM does to the controllers linked to a rain gauge once its daily
 # threshold is crossed (``actionWhenHighDailyThresholdExceeded``). Only the codes
@@ -179,3 +188,10 @@ FLOW_WINDOW = timedelta(minutes=15)
 # or above the poll interval: ticks reach the cloud with ~80s of upload lag, so
 # a tighter bound would intermittently report 0 during active watering.
 FLOW_IDLE_AFTER = DEFAULT_SCAN_INTERVAL
+
+# Read a turbine as idle once its newest tick is older than this. Only a
+# fallback: a turbine sends a 0 tick when the water stops, and that tick is what
+# normally ends the flow. Wider than ``FLOW_IDLE_AFTER``, because a turbine's
+# ticks were seen reaching the cloud ~2.5 min late (#12) and a single stale
+# reading is all the rate is made of.
+TURBINE_IDLE_AFTER = 2 * DEFAULT_SCAN_INTERVAL

@@ -346,10 +346,12 @@ async def test_rain_gauge_entities_are_accepted_by_home_assistant(
     assert rain_device.via_device_id == gateway.id
 
 
-async def test_a_wired_rain_sensor_is_accepted_by_home_assistant(
-    hass: HomeAssistant, entry
+async def test_an_lr_ip_eco_turbine_and_rain_sensor_load(
+    hass: HomeAssistant, entry, freezer
 ) -> None:
-    """The LR-IP-ECO of #8: a turbine (not modelled) and a dry-contact sensor."""
+    """The LR-IP-ECO of #8 and #12: a turbine and a dry-contact rain sensor."""
+    await hass.config.async_set_time_zone("Europe/Paris")
+    freezer.move_to("2026-10-11T17:50:00+00:00")
     lr_ip_eco = {
         **CONTROLLER,
         "name": "Ceyreste",
@@ -362,7 +364,26 @@ async def test_a_wired_rain_sensor_is_accepted_by_home_assistant(
         "type": 33,
         "unit": 1,
         "index": 1,
+        "interval": 1,
         "expression": "javascript:if(x<=0){0.0}else{x}",
+    }
+    # The watering run from the #12 dump, ending on the 0 tick sent at stop.
+    turbine_window = {
+        **turbine,
+        "computedSensorData": [
+            {"tickTimestamp": f"2026-10-11T17:{minute}:00.000Z", "value": value}
+            for minute, value in (
+                (34, 2.185219681484),
+                (36, 8.0357307584),
+                (37, 2.427487961971),
+                (38, 7.2019639999999985),
+                (39, 3.495349442475),
+                (40, 8.1746021056),
+                (41, 8.500848801983999),
+                (42, 6.431647349003999),
+                (43, 0),
+            )
+        ],
     }
     rain = {
         "id": "c1",
@@ -394,24 +415,30 @@ async def test_a_wired_rain_sensor_is_accepted_by_home_assistant(
         patch(_GET, AsyncMock(side_effect=lambda module_id: pages[module_id])),
         patch(_STATE, AsyncMock(side_effect=lambda module_id: states[module_id])),
         patch(_FIELDS, AsyncMock(return_value={})),
-        patch(_SENSOR_DATA, AsyncMock(return_value=[turbine, rain])),
+        patch(_SENSOR_DATA, AsyncMock(return_value=[turbine_window, rain])),
         patch(_TICK, tick),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
+
+    used = hass.states.get("sensor.ceyreste_turbine_water_used_today")
+    assert used is not None, [s.entity_id for s in hass.states.async_all()]
+    # MySOLEM's chart showed 46.5 L for this run.
+    assert float(used.state) == 46.45
+    assert used.attributes["unit_of_measurement"] == "L"
+    assert used.attributes["state_class"] == "total"
+    rate = hass.states.get("sensor.ceyreste_turbine_flow_rate")
+    assert float(rate.state) == 0.0
+    assert rate.attributes["last_measurement"] == "2026-10-11T17:43:00+00:00"
 
     wet = hass.states.get("binary_sensor.ceyreste_capteur_de_pluie")
     assert wet is not None, [s.entity_id for s in hass.states.async_all()]
     assert wet.state == "on"
     assert wet.attributes["device_class"] == "moisture"
     assert wet.attributes["last_measurement"] == "2026-10-07T18:55:00+00:00"
-    # Only the rain sensor is read; the turbine still waits on #12.
+    # The turbine is read from the window alone: its newest tick is raw, and
+    # its scaling curve is JavaScript.
     tick.assert_awaited_once_with("c1")
-    assert not [
-        s.entity_id
-        for s in hass.states.async_all()
-        if s.entity_id.endswith(("_water_used", "_flow_rate"))
-    ]
 
 
 async def test_an_account_of_bluetooth_only_controllers_loads(

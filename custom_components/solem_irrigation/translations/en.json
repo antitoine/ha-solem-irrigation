@@ -98,6 +98,9 @@
       "water_flow_rate": {
         "name": "{meter} flow rate"
       },
+      "water_used_today": {
+        "name": "{meter} water used today"
+      },
       "rainfall": {
         "name": "{gauge} rainfall"
       }
