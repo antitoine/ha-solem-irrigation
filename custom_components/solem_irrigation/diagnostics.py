@@ -175,6 +175,10 @@ async def _module_diagnostics(
         "rain_sensors": [
             {"name": r.name, "index": r.index} for r in module.rain_sensors
         ],
+        "turbines": [
+            {"name": t.name, "index": t.index, "unit": t.unit, "interval": t.interval}
+            for t in module.turbines
+        ],
         # The two raw payloads. ``raw`` is the embedded ``let module`` object;
         # ``raw_inputs`` is the unfiltered sensor list, which ``raw`` does not
         # contain and which is where an unmodelled sensor shows up.
@@ -224,6 +228,17 @@ async def async_get_config_entry_diagnostics(
         "rain_sensor_readings": {
             sensor_id: {"wet": reading.wet, "timestamp": reading.timestamp.isoformat()}
             for sensor_id, reading in coordinator.rain_sensor_readings.items()
+        },
+        "turbine_readings": {
+            turbine_id: {
+                "day": reading.day.isoformat(),
+                "volume_today": reading.volume_today,
+                "rate": reading.rate,
+                "timestamp": (
+                    reading.timestamp.isoformat() if reading.timestamp else None
+                ),
+            }
+            for turbine_id, reading in coordinator.turbine_readings.items()
         },
         "modules": {
             module_id: await _module_diagnostics(coordinator, module, relevant)
