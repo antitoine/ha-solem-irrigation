@@ -39,6 +39,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after which the cloud's status is shown as is. Controllers that report no
   status are unchanged.
 
+## [0.10.0b1] - 2026-10-11
+
+First beta of 0.10.0, for the LR-IP-ECO's turbine flow meter in
+[#12](https://github.com/antitoine/ha-solem-irrigation/issues/12). It is built
+from a real watering run but has not yet run on a real turbine. To install it,
+enable **Show beta versions** in HACS.
+
+### Added
+
+- **Turbine flow meters.** The turbine on an LR-IP-ECO (débitmètre turbine,
+  SOLEM input type 33) now gets two sensors on its controller: *&lt;turbine&gt;
+  flow rate*, in L/min, and *&lt;turbine&gt; water used today*, the litres
+  through it since local midnight, ready for the **Water** dashboard. A turbine
+  keeps no running total the way a classic flow meter does: it reports the
+  flow once a minute while water runs, and MySOLEM's own charts add those
+  readings up. The integration does the same, re-adding the day on every poll,
+  so a restart neither loses nor double-counts anything. Checked against the
+  #12 reporter's run: 46.45 L for MySOLEM's 46.5 L.
+  ([#12](https://github.com/antitoine/ha-solem-irrigation/issues/12))
+
 ## [0.9.0] - 2026-10-11
 
 ### Added
@@ -383,7 +403,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.10.0b1...HEAD
+[0.10.0b1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0...v0.10.0b1
 [0.9.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.7.0...v0.8.0
