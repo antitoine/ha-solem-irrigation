@@ -7,12 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0b2] - 2026-10-19
+
+Second beta of 0.10.0, adding agricultural LR-AG modules
+([#5](https://github.com/antitoine/ha-solem-irrigation/issues/5),
+[#17](https://github.com/antitoine/ha-solem-irrigation/pull/17)) and holding
+ON/OFF commands until the controller confirms them over LoRa
+([#16](https://github.com/antitoine/ha-solem-irrigation/pull/16)), on top of
+`0.10.0b1`'s turbine flow meters
+([#12](https://github.com/antitoine/ha-solem-irrigation/issues/12)). Thanks to
+[@Tocio88](https://github.com/Tocio88) for both contributions. To install it,
+enable **Show beta versions** in HACS.
+
 ### Added
 
 - **Agricultural LR-AG modules are now supported.** SOLEM flags them as
   agricultural rather than as watering devices, so they used to be skipped;
   they now get the same entities as any controller.
-  ([#5](https://github.com/antitoine/ha-solem-irrigation/issues/5)) An LR-AG
+  ([#5](https://github.com/antitoine/ha-solem-irrigation/issues/5),
+  [#17](https://github.com/antitoine/ha-solem-irrigation/pull/17)) An LR-AG
   differs in a few ways, as measured on one over a season:
   - Several stations can water at once, so several valves can be open
     together, *Watering station* lists every running station (and their
@@ -34,10 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports, but the controller only acks an ON/OFF command over LoRa 60-130 s
   later (measured on LR-IP modules), while the reconcile poll runs after 60 s:
   that poll still read the old status, so every toggle bounced back until the
-  next regular poll, up to five minutes later. The commanded status now holds
-  until a poll made after the command confirms it, or for ten minutes at most,
-  after which the cloud's status is shown as is. Controllers that report no
-  status are unchanged.
+  next regular poll, up to five minutes later. The commanded status (including a
+  new rain delay set on an already-OFF controller) now holds until a poll made
+  after the command confirms it, or for ten minutes at most, after which the
+  cloud's status is shown as is. Controllers that report no status are
+  unchanged. ([#16](https://github.com/antitoine/ha-solem-irrigation/pull/16))
 
 ## [0.10.0b1] - 2026-10-11
 
@@ -403,7 +417,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.10.0b1...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.10.0b2...HEAD
+[0.10.0b2]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.10.0b1...v0.10.0b2
 [0.10.0b1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0...v0.10.0b1
 [0.9.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0...v0.8.1
