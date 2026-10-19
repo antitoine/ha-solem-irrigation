@@ -619,6 +619,25 @@ async def test_command_set_status_on_holds_too(coordinator):
     assert coordinator.rain_delay_days("m1") == 0
 
 
+async def test_command_set_status_changing_rain_delay_while_off_holds_too(
+    coordinator,
+):
+    """Changing the delay on an already-OFF module holds until the new delay lands."""
+    await _set_status_then_poll(
+        coordinator, enabled=False, days=5, polled={"state": 0, "rainDelay": 2}
+    )
+    assert coordinator.watering_enabled("m1") is False
+    assert coordinator.rain_delay_days("m1") == 5
+    assert "m1" in coordinator._status_pending
+
+    coordinator.client.async_get_module_state = AsyncMock(
+        return_value={"status": {"watering": {"state": 0, "rainDelay": 5}}}
+    )
+    coordinator.data = await coordinator._async_update_data()
+    assert "m1" not in coordinator._status_pending
+    assert coordinator.rain_delay_days("m1") == 5
+
+
 async def test_command_set_status_gives_up_after_the_grace(coordinator):
     """A command the cloud never confirms stops masking what it reports."""
     await _set_status_then_poll(

@@ -215,28 +215,40 @@ def _ag_rain_delays(
     return delays
 
 
-def _reported_enabled(
+def _reported_status(
     state: dict[str, Any],
     *,
     agricultural: bool = False,
     stations: frozenset[int] | None = None,
-) -> bool | None:
-    """The ON/OFF status a live-state record carries, or None if it has none.
+) -> tuple[bool, int] | None:
+    """The ``(enabled, rain_delay_days)`` a live-state record carries, or None.
 
     Read the way SOLEM's web app reads it: ``state`` 0 (or "OFF") is off, any
     other value is on. ``state`` does *not* say whether a station is running --
     it reads 1 both while idle and while watering.
 
     An LR-AG (``agricultural``) reads as on while any of its outputs is, since
-    it can then still water; it is off once every output is. Any other module
-    reads only its ``status.watering``, whatever else its state carries.
+    it can then still water; it is off once every output is, and back on with
+    the first output whose delay expires. Any other module reads only its
+    ``status.watering``, whatever else its state carries.
     """
     if agricultural and (delays := _ag_rain_delays(state, stations)):
-        return 0 in delays
-    value = state.get("status", {}).get("watering", {}).get("state")
+        if 0 in delays:
+            return True, 0
+        return False, min(
+            (d for d in delays if 0 < d < RAIN_DELAY_PERMANENT), default=0
+        )
+    watering = state.get("status", {}).get("watering", {})
+    value = watering.get("state")
     if value is None:
         return None
-    return value not in WATERING_STATES_OFF
+    if value not in WATERING_STATES_OFF:
+        return True, 0
+    try:
+        days = int(watering.get("rainDelay", 0) or 0)
+    except TypeError, ValueError:
+        days = 0
+    return False, 0 if days >= RAIN_DELAY_PERMANENT else max(days, 0)
 
 
 def _scalable_inputs(
@@ -801,17 +813,15 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         # Only a status fetched AFTER an ON/OFF command counts as its ack: the
         # cached one (kept above for a module whose poll failed) is patched
         # with the command itself, and a poll started before the command may
-        # carry the status the command is reverting (ON, OFF, ON again).
-        for module_id, (enabled, _days, issued_at) in list(
-            self._status_pending.items()
-        ):
+        # carry the status the command is reverting (ON, OFF, ON again). Both
+        # ``enabled`` and the rain delay must match, so changing the delay on an
+        # already-OFF controller holds until the new delay is confirmed too.
+        for module_id, (enabled, days, issued_at) in list(self._status_pending.items()):
             if (
                 module_id in fetched
                 and issued_at < polled_at
-                and _reported_enabled(
-                    states[module_id], **self._status_scope(module_id)
-                )
-                == enabled
+                and _reported_status(states[module_id], **self._status_scope(module_id))
+                == (enabled, 0 if enabled else days)
             ):
                 del self._status_pending[module_id]
 
@@ -1055,7 +1065,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         return None
 
     def _status_scope(self, module_id: str) -> dict[str, Any]:
-        """How to read ``module_id``'s ON/OFF status: see ``_reported_enabled``."""
+        """How to read ``module_id``'s ON/OFF status: see ``_reported_status``."""
         module = self.modules.get(module_id)
         if module is None or not module.is_agricultural:
             return {"agricultural": False, "stations": None}
@@ -1072,9 +1082,10 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         """
         if (pending := self._pending_status(module_id)) is not None:
             return pending[0]
-        return _reported_enabled(
+        status = _reported_status(
             self.module_state(module_id), **self._status_scope(module_id)
         )
+        return None if status is None else status[0]
 
     def rain_delay_days(self, module_id: str) -> int | None:
         """Return the days left before an OFF controller turns itself back on.
@@ -1084,22 +1095,10 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         if (pending := self._pending_status(module_id)) is not None:
             enabled, days = pending
             return 0 if enabled else days
-        scope = self._status_scope(module_id)
-        state = self.module_state(module_id)
-        if (enabled := _reported_enabled(state, **scope)) is None:
-            return None
-        if enabled:
-            return 0
-        if scope["agricultural"] and (
-            delays := _ag_rain_delays(state, scope["stations"])
-        ):
-            # Every output is off: the module is back on with the first one.
-            return min((d for d in delays if 0 < d < RAIN_DELAY_PERMANENT), default=0)
-        try:
-            days = int(self._watering(module_id).get("rainDelay", 0) or 0)
-        except TypeError, ValueError:
-            return 0
-        return 0 if days >= RAIN_DELAY_PERMANENT else max(days, 0)
+        status = _reported_status(
+            self.module_state(module_id), **self._status_scope(module_id)
+        )
+        return None if status is None else status[1]
 
     def _apply_optimistic_watering(self, module_id: str, **fields: Any) -> None:
         """Optimistically reflect a manual command before the next poll.
@@ -1240,7 +1239,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 module.serial, enabled=enabled, days=days
             )
         pending = self._status_pending.get(module.id)
-        if _reported_enabled(
+        if _reported_status(
             self.module_state(module.id), **self._status_scope(module.id)
         ) is not None and (
             # Only where the cloud reports the status: inventing one would make
