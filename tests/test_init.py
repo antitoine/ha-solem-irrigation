@@ -149,8 +149,8 @@ async def test_legacy_entity_cleanup(hass: HomeAssistant, entry) -> None:
 
     entry.runtime_data = MagicMock()
     entry.runtime_data.modules = {
-        "m1": MagicMock(id="m1", raw={"isBattery": False}),
-        "bat1": MagicMock(id="bat1", raw={"isBattery": True}),
+        "m1": MagicMock(id="m1", raw={"isBattery": False}, is_bluetooth_only=False),
+        "bat1": MagicMock(id="bat1", raw={"isBattery": True}, is_bluetooth_only=False),
     }
     _async_cleanup_legacy_entities(hass, entry)
 
@@ -460,13 +460,14 @@ async def test_an_account_of_bluetooth_only_controllers_loads(
 
     assert entry.state is ConfigEntryState.LOADED
     state.assert_not_awaited()
+    # Its stored programs still give it a schedule sensor.
+    assert er.async_get(hass).async_get_entity_id("sensor", DOMAIN, "b1_schedule")
 
 
-async def test_a_bluetooth_only_controller_leftover_is_removed(
-    hass: HomeAssistant, entry
-) -> None:
-    """Up to 0.9.0b1 a BL-IP got entities that could not work; they must go."""
-    bl_ip = {**CONTROLLER, "name": "Tennis", "type": "bl-ip", "isBluetoothOnly": True}
+async def _setup_with_bluetooth_leftover(
+    hass: HomeAssistant, entry, bl_ip: dict
+) -> tuple[dr.DeviceRegistry, er.EntityRegistry]:
+    """Set up m1 and b1 where b1 already has a device and an old switch."""
     devices = dr.async_get(hass)
     entities = er.async_get(hass)
     leftover = devices.async_get_or_create(
@@ -490,17 +491,76 @@ async def test_a_bluetooth_only_controller_leftover_is_removed(
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
+    return devices, entities
+
+
+async def test_a_bluetooth_only_controller_leftover_is_removed(
+    hass: HomeAssistant, entry
+) -> None:
+    """Up to 0.9.0b1 a BL-IP got entities that could not work; they must go.
+
+    Its device stays, as its stored programs give it a schedule sensor.
+    """
+    bl_ip = {**CONTROLLER, "name": "Tennis", "type": "bl-ip", "isBluetoothOnly": True}
+
+    devices, entities = await _setup_with_bluetooth_leftover(hass, entry, bl_ip)
 
     def device(module_id: str) -> dr.DeviceEntry | None:
         return devices.async_get_device_by_identifier(
             (DOMAIN, module_id), entry.entry_id
         )
 
-    assert device("b1") is None
     assert entities.async_get_entity_id("switch", DOMAIN, "b1_enabled") is None
+    assert device("b1") is not None
+    assert entities.async_get_entity_id("sensor", DOMAIN, "b1_schedule") is not None
     # The LoRa controller next to it is untouched.
     assert device("m1") is not None
     assert entities.async_get_entity_id("switch", DOMAIN, "m1_enabled") is not None
+
+
+async def test_a_bluetooth_only_controller_without_programs_loses_its_device(
+    hass: HomeAssistant, entry
+) -> None:
+    """With nothing to show, a BL-IP's leftover device goes entirely."""
+    bl_ip = {
+        **CONTROLLER,
+        "name": "Tennis",
+        "type": "bl-ip",
+        "isBluetoothOnly": True,
+        "programs": [],
+    }
+
+    devices, entities = await _setup_with_bluetooth_leftover(hass, entry, bl_ip)
+
+    assert (
+        devices.async_get_device_by_identifier((DOMAIN, "b1"), entry.entry_id) is None
+    )
+    assert entities.async_get_entity_id("switch", DOMAIN, "b1_enabled") is None
+    assert entities.async_get_entity_id("sensor", DOMAIN, "b1_schedule") is None
+    assert (
+        devices.async_get_device_by_identifier((DOMAIN, "m1"), entry.entry_id)
+        is not None
+    )
+
+
+async def test_a_bluetooth_only_controller_with_a_schedule_cannot_be_deleted(
+    hass: HomeAssistant, entry
+) -> None:
+    """Its device holds the schedule sensor, so setup would only recreate it."""
+    schedule = MagicMock(id="b1", has_schedule=True)
+    bare = MagicMock(id="b2", has_schedule=False)
+    entry.runtime_data = MagicMock(modules={"b1": schedule, "b2": bare})
+    entry.runtime_data.relevant_module_ids.return_value = set()
+    registry = dr.async_get(hass)
+    with_schedule = registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "b1")}
+    )
+    without = registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "b2")}
+    )
+
+    assert await async_remove_config_entry_device(hass, entry, with_schedule) is False
+    assert await async_remove_config_entry_device(hass, entry, without) is True
 
 
 async def test_the_enable_switch_shows_an_off_set_outside_home_assistant(
@@ -594,7 +654,12 @@ async def test_only_a_device_that_left_the_account_can_be_removed(
     a module of the account, but no controller relays through it anymore, so
     the integration no longer exposes it.
     """
-    entry.runtime_data = MagicMock(modules={"m1": MagicMock(), "dead-gw": MagicMock()})
+    entry.runtime_data = MagicMock(
+        modules={
+            "m1": MagicMock(id="m1", has_schedule=False),
+            "dead-gw": MagicMock(id="dead-gw", has_schedule=False),
+        }
+    )
     entry.runtime_data.relevant_module_ids.return_value = {"m1"}
     registry = dr.async_get(hass)
     current = registry.async_get_or_create(

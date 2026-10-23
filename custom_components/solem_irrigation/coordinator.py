@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import aiohttp
@@ -22,6 +22,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from . import schedule
 from .api import (
     SolemApiClient,
     SolemAuthError,
@@ -47,6 +48,7 @@ from .const import (
     INPUT_TYPE_TURBINE,
     LIVE_MODULE_FIELDS,
     MAX_RAIN_DELAY_DAYS_AG,
+    MAX_SCHEDULE_OCCURRENCES,
     RAIN_DELAY_PERMANENT,
     REGION_EUROPE,
     STORAGE_KEY,
@@ -81,6 +83,8 @@ class SolemProgram:
     id: str
     name: str
     index: int
+    # The program as the cloud returned it, which the schedule is decoded from.
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -355,6 +359,19 @@ def _build_turbines(inputs: list[dict[str, Any]]) -> list[SolemTurbine]:
     ]
 
 
+def _build_programs(obj: dict[str, Any]) -> list[SolemProgram]:
+    return [
+        SolemProgram(
+            id=p["id"],
+            name=p.get("name", f"Program {p.get('index', '?')}"),
+            index=int(p.get("index", 0)),
+            raw=p,
+        )
+        for p in (obj.get("programs") or [])
+        if p.get("id")
+    ]
+
+
 def _usable_ticks(record: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the ticks of ``record`` that a rate may be derived from.
 
@@ -473,6 +490,25 @@ def _find_by_token(
     return None
 
 
+def _programming_out_of_sync(raw: dict[str, Any]) -> bool:
+    """Are there cloud-side program edits not yet pushed to the controller?
+
+    The per-program ``dataChanged`` flag does NOT reset after a send, so the
+    reliable signal is ``programmingUpdatedAt`` (last cloud edit) being newer
+    than ``programmingSentAt`` (last successful push to the device).
+    """
+    updated = dt_util.parse_datetime(str(raw.get("programmingUpdatedAt") or ""))
+    sent = dt_util.parse_datetime(str(raw.get("programmingSentAt") or ""))
+    if updated is None:
+        return False
+    if sent is None:
+        return True
+    try:
+        return dt_util.as_utc(updated) > dt_util.as_utc(sent)
+    except TypeError:
+        return False
+
+
 @dataclass(slots=True)
 class SolemModule:
     """Static description of a module (controller, gateway, sensor…)."""
@@ -526,6 +562,19 @@ class SolemModule:
             bool(self.stations)
             and (bool(self.raw.get("typeIsWatering")) or self.is_agricultural)
             and not self.is_bluetooth_only
+        )
+
+    @property
+    def has_schedule(self) -> bool:
+        """True when the module has stored programs worth showing as a schedule.
+
+        Unlike :attr:`is_controller` this does not care whether the cloud can
+        reach the module: a Bluetooth-only controller still has its programs
+        stored in MySOLEM, which is all a schedule needs. ``typeIsWatering``
+        keeps pool controllers out, as they carry programs too.
+        """
+        return bool(self.programs) and (
+            bool(self.raw.get("typeIsWatering")) or self.is_agricultural
         )
 
     @property
@@ -734,15 +783,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                         for o in (obj.get("outputs") or [])
                         if o.get("id")
                     ],
-                    programs=[
-                        SolemProgram(
-                            id=p["id"],
-                            name=p.get("name", f"Program {p.get('index', '?')}"),
-                            index=int(p.get("index", 0)),
-                        )
-                        for p in (obj.get("programs") or [])
-                        if p.get("id")
-                    ],
+                    programs=_build_programs(obj),
                     flow_meters=_build_flow_meters(inputs),
                     rain_gauges=_build_rain_gauges(inputs),
                     rain_sensors=_build_rain_sensors(inputs),
@@ -784,8 +825,8 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 _LOGGER.warning(
                     "SOLEM: %s can only be reached over Bluetooth from a phone. "
                     "MySOLEM has no live link to such a module, so Home "
-                    "Assistant can neither read nor command it, and it gets no "
-                    "entities",
+                    "Assistant can neither read nor command it, and only its "
+                    "stored schedule is shown",
                     ", ".join(f"{m.name} ({m.type})" for m in bluetooth_only),
                 )
 
@@ -873,6 +914,12 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         Merged rather than replaced, because the projection only returns stored
         columns: the capability flags this integration classifies modules with
         are computed getters and never come back.
+
+        The projection also carries ``programmingUpdatedAt``, which moves when
+        the programs are edited in MySOLEM. The projection cannot return the
+        programs themselves, so a change re-reads that module's page. The new
+        timestamp is only adopted once that succeeded, so a failed re-read is
+        retried on the next poll.
         """
         try:
             records = await self.client.async_get_module_fields(LIVE_MODULE_FIELDS)
@@ -883,9 +930,53 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
             return
         for module_id, record in records.items():
             if module := self.modules.get(module_id):
-                module.raw.update(
-                    {k: v for k, v in record.items() if k in LIVE_MODULE_FIELDS}
-                )
+                fresh = {k: v for k, v in record.items() if k in LIVE_MODULE_FIELDS}
+                remote = fresh.get("programmingUpdatedAt")
+                if (
+                    module.has_schedule
+                    and remote is not None
+                    # Compared as datetimes: the same instant can be spelled
+                    # with a ``Z`` or a ``+00:00`` suffix.
+                    and dt_util.parse_datetime(str(remote))
+                    != dt_util.parse_datetime(
+                        str(module.raw.get("programmingUpdatedAt") or "")
+                    )
+                    and not await self._async_reread_programs(module)
+                ):
+                    fresh.pop("programmingUpdatedAt")
+                    # Keep the pair consistent: a fresh sentAt against the stale
+                    # updatedAt would hide edits the controller has not got.
+                    fresh.pop("programmingSentAt", None)
+                module.raw.update(fresh)
+
+    async def _async_reread_programs(self, module: SolemModule) -> bool:
+        """Rebuild ``module``'s programs from a fresh read of its page.
+
+        Returns False, leaving the old programs in place, when the page cannot
+        be read. Only the module record and its programs are touched: the live
+        state and the pending ON/OFF bookkeeping are not, so the page's stored
+        ``status`` never counts as the controller acknowledging a command.
+        """
+        try:
+            obj, _inputs = await self.client.async_get_module_page(module.id)
+        except SolemAuthError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+        except SolemError as err:
+            _LOGGER.debug("Could not re-read programs of %s: %s", module.id, err)
+            return False
+        if not obj:
+            _LOGGER.debug("Re-reading %s returned no parseable data", module.id)
+            return False
+        try:
+            programs = _build_programs(obj)
+        except TypeError, ValueError, KeyError, AttributeError:
+            _LOGGER.debug("Re-reading %s returned undecodable programs", module.id)
+            return False
+        module.raw.update(obj)
+        module.programs = programs
+        if module.is_agricultural:
+            _name_stations_after_programs(module)
+        return True
 
     async def _async_poll_inputs(self, module_id: str) -> None:
         """Refresh every sensor reading on a module.
@@ -1124,6 +1215,96 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
             self.module_state(module_id), **self._status_scope(module_id)
         )
         return None if status is None else status[1]
+
+    def schedule_overview(self, module_id: str) -> dict[str, Any]:
+        """Describe a module's stored programs and when they next run.
+
+        Times are in Home Assistant's time zone: the module record carries no
+        time zone of its own. The result holds ``next_run``, a summary of every
+        program under ``programs``, the ``occurrences`` due from local midnight
+        today through tomorrow (capped), and whether MySOLEM holds edits the
+        controller has not received (``pending_push``). A controller that is
+        off, or an LR-AG station under a rain delay, has no runs, but its
+        programs are still listed. ``{}`` for an unknown module.
+        """
+        module = self.modules.get(module_id)
+        if module is None:
+            return {}
+        now = dt_util.now()
+        start = dt_util.start_of_local_day()
+        end = dt_util.start_of_local_day(start.date() + timedelta(days=2))
+        stations = [(s.index, s.name) for s in module.stations]
+        agricultural = module.is_agricultural
+        # None (a Bluetooth-only module, or no state yet) does not gate.
+        enabled = self.watering_enabled(module_id)
+        # An LR-AG suspends per station; a classic controller only globally.
+        pending = self._pending_status(module_id)
+        # A just-issued ON clears the rain delays, which the cloud still reports.
+        suspended = (
+            {
+                idx
+                for idx, output in _ag_outputs(self.module_state(module_id)).items()
+                if output.get("rainDelay")
+            }
+            if agricultural and not (pending is not None and pending[0])
+            else set()
+        )
+        active = [st for st in stations if st[0] not in suspended]
+
+        programs: list[dict[str, Any]] = []
+        occurrences: list[dict[str, Any]] = []
+        next_starts: list[datetime] = []
+        for program in module.programs:
+            try:
+                summary = schedule.program_summary(
+                    program.raw, agricultural=agricultural
+                )
+                if agricultural:
+                    paired = next(
+                        (name for idx, name in stations if idx == program.index + 1),
+                        None,
+                    )
+                    summary["stations"] = [paired] if paired else []
+                else:
+                    durations = summary.get("durations") or {}
+                    summary["stations"] = [
+                        name for idx, name in sorted(stations) if str(idx) in durations
+                    ]
+                program_runs: list[dict[str, Any]] = []
+                run = None
+                if enabled is not False:
+                    program_runs = schedule.program_occurrences(
+                        program.raw,
+                        active,
+                        start,
+                        end,
+                        agricultural=agricultural,
+                        program_name=program.name,
+                    )
+                    run = schedule.next_run(
+                        program.raw, active, now, agricultural=agricultural
+                    )
+            except (TypeError, ValueError) as err:
+                _LOGGER.debug(
+                    "Program %s of %s could not be decoded: %s",
+                    program.id,
+                    module_id,
+                    err,
+                )
+                continue
+            programs.append(summary)
+            occurrences.extend(program_runs)
+            if run is not None:
+                next_starts.append(run)
+        occurrences.sort(
+            key=lambda o: (datetime.fromisoformat(o["start"]), o["station_index"])
+        )
+        return {
+            "next_run": min(next_starts) if next_starts else None,
+            "programs": programs,
+            "occurrences": occurrences[:MAX_SCHEDULE_OCCURRENCES],
+            "pending_push": _programming_out_of_sync(module.raw),
+        }
 
     def _apply_optimistic_watering(self, module_id: str, **fields: Any) -> None:
         """Optimistically reflect a manual command before the next poll.

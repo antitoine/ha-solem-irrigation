@@ -27,6 +27,12 @@ BASE_URLS = {
 # we do not own.
 DEFAULT_SCAN_INTERVAL = timedelta(minutes=5)
 
+# How far ahead the schedule sensor lists individual runs (from local midnight
+# today to local midnight in two days: today and tomorrow), and how many it
+# keeps. Occurrences are not recorded, so the recorder's size cap does not apply
+# (12 stations x 8 starts x 2 days = 192).
+MAX_SCHEDULE_OCCURRENCES = 250
+
 # Manual run duration (minutes) used when a station switch is turned on.
 DEFAULT_RUN_MINUTES = 5
 MIN_RUN_MINUTES = 1
@@ -156,6 +162,12 @@ LIVE_MODULE_FIELDS = (
     # contact is read from the input's own ticks instead. Free to carry, and it
     # keeps a diagnostics dump honest about the live value.
     "sensorState",
+    # `programmingUpdatedAt` moves on every program edit made in MySOLEM, and a
+    # change triggers a re-read of that module's page: the projection omits
+    # `programs` (a relation), which is why the page is re-read. Gateways report
+    # null. `programmingSentAt` is the last push to the controller.
+    "programmingUpdatedAt",
+    "programmingSentAt",
 )
 
 # Module types MySOLEM can only ever reach over a phone's Bluetooth, copied from

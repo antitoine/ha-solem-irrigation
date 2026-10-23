@@ -22,7 +22,7 @@ difference. Agricultural **LR-AG** modules, which MySOLEM files apart from
 watering devices, are picked up too — see
 [limitations](#how-it-works--limitations) for how they differ.
 **Bluetooth-only** modules (BL-IP …) are the exception: MySOLEM
-has no live link to them, so they get no entities — see
+has no live link to them, so they get only a *Schedule* sensor — see
 [limitations](#how-it-works--limitations). Development happens against an
 LR-IS behind an LR-MB-10; other models are reported working by their owners. If
 yours is not detected, please
@@ -48,6 +48,7 @@ your account:
 | **Switch** *Irrigation enabled* | Turn the controller on, or off permanently. Also shows an OFF set from MySOLEM or by a rain gauge. |
 | **Number** *Rain delay* | Disable for N days (0 = enabled) — SOLEM's "Report de pluie". Shows the days left, whoever set the delay. |
 | **Sensor** *Watering station* | Name of the station currently watering (idle = none). |
+| **Sensor** *Schedule* | When the controller next waters, from the programs stored in MySOLEM. Attributes: each program (days or cycle, start times or LR-AG windows, per-station durations, enabled) and every run from today until tomorrow night. *Unknown* while the controller is off. Bluetooth-only controllers get it too. |
 | **Sensor** *Last communication* | When the module last talked to the cloud — the LoRa radio contact for modules behind a gateway, the module's own connection for the gateway and for WiFi controllers. |
 | **Sensor** *Battery* | Battery indicator (battery-powered modules). |
 | **Sensor** *&lt;meter&gt; water used* | SOLEM's lifetime water counter, for controllers with a flow meter (débitmètre). Add it to the Home Assistant **Water** dashboard. |
@@ -126,11 +127,16 @@ pool integration, not this one.)
 - **Bluetooth-only modules** (BL-IP and the other `bl-*` models) are only ever
   reached by a phone standing next to them; MySOLEM has no gateway or WiFi link
   to them, and its own web app does not even try to read their state. The
-  integration can neither read nor command them, so it gives them no entities
-  (and removes the ones versions up to 0.9.0b1 created) and logs a warning
-  naming them. For these, a Bluetooth integration such as
+  integration can neither read nor command them, so it gives them only their
+  *Schedule* sensor (removing the other entities versions up to 0.9.0b1
+  created) and logs a warning naming them. For these, a Bluetooth integration such as
   [Solem Toolkit](https://github.com/hcraveiro/Home-Assistant-Solem-Toolkit) is
   the realistic route.
+- The *Schedule* sensor is read-only. The programs are read at setup and read
+  again when MySOLEM reports a programming change, which is checked on every
+  poll. Times use Home Assistant's time zone, as the module record carries none.
+  `pending_push` is true while MySOLEM holds edits the controller has not
+  received yet.
 - An agricultural **LR-AG** works like any controller, with these differences:
   it can water several stations at once, so several of its valves can be open
   together, *Watering station* lists them all, and closing a valve stops only

@@ -42,12 +42,17 @@ maintainable.
   gauge (its lifetime total, plus SOLEM's live threshold flag), on/off rain
   sensor (its newest 0/1 tick) and turbine (no counter: its day total is
   re-added from midnight's ticks on every poll, never dropping within a day). Bluetooth-only modules are never state-polled
-  and get no entities: the cloud cannot reach them.
+  and get only a schedule sensor: the cloud cannot reach them. A module page is
+  re-read when its `programmingUpdatedAt` moves.
 - **`__init__.py`** — entry setup / unload, legacy-entity cleanup, and the
   device pre-registration that also links each controller to its LoRa gateway.
   The link uses `via_device_id`, which needs a device-registry id, so it cannot
   live in an entity's `device_info`. Also the removal hook that lets a user
   delete a device the integration no longer exposes.
+- **`schedule.py`** — pure program decoder (no Home Assistant imports): turns a
+  program record into a summary and its upcoming runs. The one exception to
+  "`api.py` is the only place that knows the wire format", for the program
+  record.
 - **`entity.py`** — base `CoordinatorEntity` sharing `device_info` across
   platforms.
 - **Platforms** — thin wrappers over coordinator data:
@@ -60,8 +65,8 @@ maintainable.
   - `number.py` — per-station *Run duration* and *Rain delay* (live days
     left, assumed-state fallback).
   - `button.py` — global *Stop watering*.
-  - `sensor.py` — *Watering station*, *Last communication*, *Battery*, per
-    flow meter *water used* (cumulative) + *flow rate*, per turbine *water
+  - `sensor.py` — *Watering station*, *Schedule*, *Last communication*,
+    *Battery*, per flow meter *water used* (cumulative) + *flow rate*, per turbine *water
     used today* (daily, `last_reset` at local midnight) + *flow rate*, and per
     rain gauge *rainfall* (cumulative).
   - `binary_sensor.py` — per rain gauge *rain threshold* (SOLEM's flag), and

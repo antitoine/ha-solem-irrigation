@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -14,7 +15,7 @@ from homeassistant.const import (
     UnitOfVolume,
     UnitOfVolumeFlowRate,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -43,6 +44,10 @@ async def async_setup_entry(
     relevant = coordinator.relevant_module_ids()
     entities: list[SensorEntity] = []
     for module in coordinator.modules.values():
+        # Not gated on `relevant`: a Bluetooth-only controller gets no other
+        # entity, yet MySOLEM still holds its programs.
+        if module.has_schedule:
+            entities.append(SolemScheduleSensor(coordinator, module))
         if module.id not in relevant:
             continue
         entities.append(SolemLastCommunicationSensor(coordinator, module))
@@ -128,6 +133,45 @@ class SolemRunningStationSensor(SolemModuleEntity, SensorEntity):
         if not time_left or time_left == "00:00":
             return None
         return {"time_remaining": time_left}
+
+
+class SolemScheduleSensor(SolemModuleEntity, SensorEntity):
+    """When the module next waters, from the programs stored in MySOLEM.
+
+    The state is the next programmed run, unknown while the controller is off or
+    nothing is due. The attributes carry every stored program and the runs due
+    today and tomorrow; those runs change with the clock, so they are kept out
+    of the recorder rather than written to the database on every change.
+    """
+
+    _attr_translation_key = "schedule"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:calendar-clock"
+    _unrecorded_attributes = frozenset({"occurrences"})
+
+    def __init__(
+        self, coordinator: SolemDataUpdateCoordinator, module: SolemModule
+    ) -> None:
+        """Initialise the schedule sensor."""
+        super().__init__(coordinator, module)
+        self._attr_unique_id = f"{module.id}_schedule"
+        self._overview: dict[str, Any] = coordinator.schedule_overview(module.id)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Compute the overview once per update, not once per property."""
+        self._overview = self.coordinator.schedule_overview(self._module_id)
+        super()._handle_coordinator_update()
+
+    @property
+    def native_value(self) -> datetime | None:
+        """Return the start of the next programmed run, if any."""
+        return self._overview.get("next_run")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the programs, the upcoming runs and the push status."""
+        return {k: v for k, v in self._overview.items() if k != "next_run"}
 
 
 class SolemLastCommunicationSensor(SolemModuleEntity, SensorEntity):

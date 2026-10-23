@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.solem_irrigation import coordinator as coordinator_module
 from custom_components.solem_irrigation.api import (
     SolemAuthError,
     SolemConnectionError,
@@ -2090,3 +2091,568 @@ async def test_update_data_falls_back_to_an_ag_record_status(coordinator):
     coordinator.data = await coordinator._async_update_data()
     assert coordinator.watering_enabled("ag1") is False
     assert coordinator.rain_delay_days("ag1") == 0
+
+
+# -- program schedules --------------------------------------------------------
+
+T0 = "2026-10-01T10:00:00.000Z"
+T1 = "2026-10-02T08:30:00.000Z"
+
+
+def _program_raw(**kwargs) -> dict:
+    """A classic program record: every day at 06:00, 10 minutes on station 1."""
+    base = {
+        "id": "p1",
+        "name": "Matin",
+        "index": 1,
+        "cycle": 0,
+        "weekDays": 127,
+        "startTimes": [360, -1, -1, -1, -1, -1, -1, -1],
+        "stationsDuration": [600] + [0] * 11,
+        "waterBudget": 100,
+        "timeBetweenStations": 0,
+    }
+    base.update(kwargs)
+    return base
+
+
+def _scheduled(raw: dict | None = None, **kwargs) -> SolemModule:
+    raw = raw or _program_raw()
+    return _module(
+        programs=[
+            SolemProgram(id=raw["id"], name=raw["name"], index=raw["index"], raw=raw)
+        ],
+        **kwargs,
+    )
+
+
+def _ag_window(start: int, end: int, on: int = 600, off: int = 0) -> dict:
+    return {"start": start, "end": end, "on": on, "off": off}
+
+
+def _ag_program_raw(index: int, **kwargs) -> dict:
+    """An LR-AG program record: one window, every day."""
+    base = {
+        "id": f"pr{index + 1}",
+        "name": f"Rang {index + 1}",
+        "index": index,
+        "cycle": 0,
+        "weekDays": 127,
+        "windows": [_ag_window(1320, 120)] + [_ag_window(-1, -1, 0, 0)] * 3,
+        "waterBudget": 100,
+    }
+    base.update(kwargs)
+    return base
+
+
+def _ag_scheduled(*raws: dict) -> SolemModule:
+    return _ag_module(
+        stations=[
+            SolemStation(id=f"o{i + 1}", name=f"Station {i + 1}", index=i + 1)
+            for i in range(len(raws))
+        ],
+        programs=[
+            SolemProgram(id=r["id"], name=r["name"], index=r["index"], raw=r)
+            for r in raws
+        ],
+    )
+
+
+def _reread_setup(coordinator, modules, fields, page) -> None:
+    coordinator.modules = modules
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_fields = AsyncMock(return_value=fields)
+    coordinator.client.async_get_module_page = page
+
+
+def _page(name: str = "Renamed", updated: str = T1) -> AsyncMock:
+    return AsyncMock(
+        return_value=(
+            {
+                "programs": [{"id": "p1", "name": name, "index": 1}],
+                "programmingUpdatedAt": updated,
+            },
+            [],
+        )
+    )
+
+
+async def test_setup_keeps_each_programs_raw_record(coordinator):
+    record = _program_raw(id="pr1", name="Prog")
+    coordinator.client.async_login = AsyncMock(return_value="uid")
+    coordinator.client.async_get_module_ids = AsyncMock(return_value=["m1"])
+    coordinator.client.async_get_module_page = AsyncMock(
+        return_value=(
+            {
+                "name": "Ctrl",
+                "type": "LR-IS",
+                "typeIsWatering": True,
+                "outputs": [{"id": "o1", "name": "Z1", "index": 1}],
+                "programs": [record, {"name": "no id, dropped"}],
+            },
+            [],
+        )
+    )
+
+    await coordinator.async_setup()
+
+    programs = coordinator.modules["m1"].programs
+    assert [p.id for p in programs] == ["pr1"]
+    assert programs[0].raw == record
+
+
+async def test_programming_change_rereads_only_that_module(coordinator):
+    m1 = _module(id="m1", raw={"typeIsWatering": True, "programmingUpdatedAt": T0})
+    m2 = _module(id="m2", raw={"typeIsWatering": True, "programmingUpdatedAt": T0})
+    page = _page()
+    _reread_setup(
+        coordinator,
+        {"m1": m1, "m2": m2},
+        {
+            "m1": {"id": "m1", "programmingUpdatedAt": T1},
+            "m2": {"id": "m2", "programmingUpdatedAt": T0},
+        },
+        page,
+    )
+
+    await coordinator._async_update_data()
+
+    page.assert_awaited_once_with("m1")
+    assert [p.name for p in m1.programs] == ["Renamed"]
+    assert [p.name for p in m2.programs] == ["Matin"]
+    assert m1.raw["programmingUpdatedAt"] == T1
+    assert m1.raw["typeIsWatering"] is True
+
+
+async def test_same_programming_time_spelled_differently_skips_reread(coordinator):
+    gateway = _module(id="g1", raw={"seenAt": T0})
+    m1 = _module(
+        id="m1",
+        raw={
+            "typeIsWatering": True,
+            "programmingUpdatedAt": "2026-10-01T10:00:41.855Z",
+        },
+    )
+    page = _page()
+    _reread_setup(
+        coordinator,
+        {"m1": m1, "g1": gateway},
+        {
+            "m1": {
+                "id": "m1",
+                "programmingUpdatedAt": "2026-10-01T10:00:41.855+00:00",
+            },
+            # A gateway has no programs and reports null.
+            "g1": {"id": "g1", "programmingUpdatedAt": None},
+        },
+        page,
+    )
+
+    await coordinator._async_update_data()
+
+    page.assert_not_awaited()
+    assert [p.name for p in m1.programs] == ["Matin"]
+
+
+async def test_reread_failure_keeps_programs_and_retries_next_poll(coordinator):
+    m1 = _module(id="m1", raw={"typeIsWatering": True, "programmingUpdatedAt": T0})
+    page = AsyncMock(side_effect=SolemConnectionError("boom"))
+    _reread_setup(
+        coordinator,
+        {"m1": m1},
+        {"m1": {"id": "m1", "programmingUpdatedAt": T1}},
+        page,
+    )
+
+    result = await coordinator._async_update_data()
+
+    assert result == {"m1": {}}  # the poll itself still succeeds
+    assert [p.name for p in m1.programs] == ["Matin"]
+    assert m1.raw["programmingUpdatedAt"] == T0
+
+    coordinator.client.async_get_module_page = _page()
+    await coordinator._async_update_data()
+
+    assert [p.name for p in m1.programs] == ["Renamed"]
+    assert m1.raw["programmingUpdatedAt"] == T1
+
+
+async def test_reread_unparseable_page_keeps_programs(coordinator):
+    m1 = _module(id="m1", raw={"typeIsWatering": True, "programmingUpdatedAt": T0})
+    _reread_setup(
+        coordinator,
+        {"m1": m1},
+        {"m1": {"id": "m1", "programmingUpdatedAt": T1}},
+        AsyncMock(return_value=({}, [])),
+    )
+
+    await coordinator._async_update_data()
+
+    assert [p.name for p in m1.programs] == ["Matin"]
+    assert m1.raw["programmingUpdatedAt"] == T0
+
+
+async def test_reread_auth_error_is_reauth(coordinator):
+    m1 = _module(id="m1", raw={"typeIsWatering": True, "programmingUpdatedAt": T0})
+    _reread_setup(
+        coordinator,
+        {"m1": m1},
+        {"m1": {"id": "m1", "programmingUpdatedAt": T1}},
+        AsyncMock(side_effect=SolemAuthError("nope")),
+    )
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+
+async def test_bluetooth_only_module_programs_are_reread(coordinator):
+    b1 = _module(
+        id="b1",
+        type="bl-ip",
+        raw={
+            "typeIsWatering": True,
+            "isBluetoothOnly": True,
+            "programmingUpdatedAt": T0,
+        },
+    )
+    page = _page()
+    _reread_setup(
+        coordinator,
+        {"b1": b1},
+        {"b1": {"id": "b1", "programmingUpdatedAt": T1}},
+        page,
+    )
+
+    await coordinator._async_update_data()
+
+    page.assert_awaited_once_with("b1")
+    assert [p.name for p in b1.programs] == ["Renamed"]
+    coordinator.client.async_get_module_state.assert_not_awaited()
+
+
+async def test_pool_module_programming_change_is_not_reread(coordinator):
+    pool = _module(id="pool", raw={"typeIsWatering": False, "programmingUpdatedAt": T0})
+    page = _page()
+    _reread_setup(
+        coordinator,
+        {"pool": pool},
+        {"pool": {"id": "pool", "programmingUpdatedAt": T1}},
+        page,
+    )
+
+    await coordinator._async_update_data()
+
+    page.assert_not_awaited()
+    assert pool.has_schedule is False
+    assert pool.raw["programmingUpdatedAt"] == T1  # still tracked, just not acted on
+
+
+async def test_reread_does_not_touch_the_live_state(coordinator):
+    """The page's stored `status` must never count as an ON/OFF ack."""
+    m1 = _module(id="m1", raw={"typeIsWatering": True, "programmingUpdatedAt": T0})
+    page = AsyncMock(
+        return_value=(
+            {
+                "programs": [{"id": "p1", "name": "Renamed", "index": 1}],
+                "status": _stored(state=1),
+            },
+            [],
+        )
+    )
+    _reread_setup(
+        coordinator,
+        {"m1": m1},
+        {"m1": {"id": "m1", "programmingUpdatedAt": T1}},
+        page,
+    )
+    coordinator._status_pending["m1"] = (False, 0, dt_util.utcnow())
+
+    await coordinator._async_update_data()
+
+    assert coordinator._status_pending["m1"][:2] == (False, 0)
+
+
+async def test_reread_renames_ag_stations_after_new_program_names(coordinator):
+    ag = _ag_scheduled(_ag_program_raw(0))
+    ag.raw["programmingUpdatedAt"] = T0
+    page = AsyncMock(
+        return_value=(
+            {"programs": [_ag_program_raw(0, name="Vigne")]},
+            [],
+        )
+    )
+    _reread_setup(
+        coordinator,
+        {"ag1": ag},
+        {"ag1": {"id": "ag1", "programmingUpdatedAt": T1}},
+        page,
+    )
+
+    await coordinator._async_update_data()
+
+    assert [s.name for s in ag.stations] == ["Vigne"]
+
+
+async def test_schedule_overview_unknown_module_is_empty(coordinator):
+    assert coordinator.schedule_overview("ghost") == {}
+
+
+async def test_schedule_overview_weekly_next_run_across_midnight(
+    hass, coordinator, freezer
+):
+    await hass.config.async_set_time_zone("Europe/Paris")
+    freezer.move_to("2026-10-18T21:30:00+00:00")  # Sunday 23:30 in Paris
+    coordinator.modules = {"m1": _scheduled(_program_raw(weekDays=1))}
+
+    overview = coordinator.schedule_overview("m1")
+
+    assert overview["next_run"] == datetime(
+        2026, 10, 19, 6, 0, tzinfo=ZoneInfo("Europe/Paris")
+    )
+    [program] = overview["programs"]
+    assert program["days"] == ["mon"]
+    assert program["start_times"] == ["06:00"]
+    assert program["durations"] == {"1": 10.0}
+    assert program["stations"] == ["Pelouse 1"]
+    assert [o["start"] for o in overview["occurrences"]] == [
+        "2026-10-19T06:00:00+02:00"
+    ]
+    assert overview["occurrences"][0]["end"] == "2026-10-19T06:10:00+02:00"
+    assert overview["pending_push"] is False
+
+
+async def test_schedule_overview_decodes_weekdays(coordinator):
+    coordinator.modules = {"m1": _scheduled(_program_raw(weekDays=69))}
+
+    [program] = coordinator.schedule_overview("m1")["programs"]
+
+    assert program["days"] == ["mon", "wed", "sun"]
+
+
+async def test_schedule_overview_parked_program_is_listed_but_never_runs(coordinator):
+    coordinator.modules = {"m1": _scheduled(_program_raw(cycle=0, weekDays=0))}
+
+    overview = coordinator.schedule_overview("m1")
+
+    assert [p["enabled"] for p in overview["programs"]] == [False]
+    assert overview["occurrences"] == []
+    assert overview["next_run"] is None
+
+
+async def test_schedule_overview_ag_windows(hass, coordinator, freezer):
+    await hass.config.async_set_time_zone("Europe/Paris")
+    freezer.move_to("2026-10-18T21:30:00+00:00")  # Sunday 23:30 in Paris
+    coordinator.modules = {"ag1": _ag_scheduled(_ag_program_raw(0, name="Vigne"))}
+
+    overview = coordinator.schedule_overview("ag1")
+
+    [program] = overview["programs"]
+    assert program["windows"] == [
+        {"start": "22:00", "end": "02:00", "on_min": 10.0, "off_min": 0.0}
+    ]
+    assert program["stations"] == ["Station 1"]
+    assert "2026-10-19T02:00:00+02:00" in [o["end"] for o in overview["occurrences"]]
+    assert {o["station"] for o in overview["occurrences"]} == {"Station 1"}
+    assert overview["next_run"] == datetime(
+        2026, 10, 19, 22, 0, tzinfo=ZoneInfo("Europe/Paris")
+    )
+
+
+async def test_schedule_overview_ag_skips_rain_delayed_station(
+    hass, coordinator, freezer
+):
+    await hass.config.async_set_time_zone("Europe/Paris")
+    freezer.move_to("2026-10-18T21:30:00+00:00")
+    coordinator.modules = {"ag1": _ag_scheduled(_ag_program_raw(0), _ag_program_raw(1))}
+    coordinator.data = {
+        "ag1": _ag_state(_ag_output(0, rain_delay=3), _ag_output(1)),
+    }
+
+    overview = coordinator.schedule_overview("ag1")
+
+    assert len(overview["programs"]) == 2  # still listed
+    assert overview["occurrences"]
+    assert {o["station_index"] for o in overview["occurrences"]} == {2}
+
+
+async def test_schedule_overview_off_controller_has_no_next_run(coordinator):
+    coordinator.modules = {"m1": _scheduled()}
+    coordinator.data = _watering(state=0)
+
+    overview = coordinator.schedule_overview("m1")
+
+    assert overview["next_run"] is None
+    assert overview["occurrences"] == []
+    assert len(overview["programs"]) == 1
+
+
+async def test_schedule_overview_unknown_status_still_schedules(coordinator):
+    coordinator.modules = {"m1": _scheduled()}
+    coordinator.data = {"m1": {}}  # no `status.watering.state` reported
+
+    overview = coordinator.schedule_overview("m1")
+
+    assert overview["next_run"] is not None
+    assert overview["occurrences"]
+
+
+async def test_schedule_overview_caps_occurrences(
+    hass, coordinator, freezer, monkeypatch
+):
+    await hass.config.async_set_time_zone("Europe/Paris")
+    freezer.move_to("2026-10-18T21:30:00+00:00")
+    # 8 start times x 7 stations x 2 days = 112 runs.
+    raw = _program_raw(
+        startTimes=[0, 180, 360, 540, 720, 900, 1080, 1260],
+        stationsDuration=[60] * 7 + [0] * 5,
+    )
+    coordinator.modules = {
+        "m1": _scheduled(
+            raw,
+            stations=[
+                SolemStation(id=f"s{i}", name=f"Zone {i}", index=i) for i in range(1, 8)
+            ],
+        )
+    }
+
+    monkeypatch.setattr(coordinator_module, "MAX_SCHEDULE_OCCURRENCES", 50)
+
+    occurrences = coordinator.schedule_overview("m1")["occurrences"]
+
+    assert len(occurrences) == 50
+    assert [o["start"] for o in occurrences] == sorted(o["start"] for o in occurrences)
+
+
+async def test_schedule_overview_pending_push(coordinator):
+    coordinator.modules = {"m1": _scheduled()}
+    module = coordinator.modules["m1"]
+    module.raw.update(
+        programmingUpdatedAt="2026-10-02T10:00:00.000Z",
+        programmingSentAt="2026-10-02T09:00:00.000Z",
+    )
+    assert coordinator.schedule_overview("m1")["pending_push"] is True
+
+    module.raw["programmingSentAt"] = "2026-10-02T10:00:00.000Z"
+    assert coordinator.schedule_overview("m1")["pending_push"] is False
+
+    module.raw["programmingSentAt"] = "2026-10-02T11:00:00.000Z"
+    assert coordinator.schedule_overview("m1")["pending_push"] is False
+
+
+async def test_reread_with_undecodable_program_keeps_everything(coordinator):
+    m1 = _module(id="m1", raw={"typeIsWatering": True, "programmingUpdatedAt": T0})
+    page = AsyncMock(
+        return_value=(
+            {
+                "programs": [{"id": "p1", "name": "Bad", "index": None}],
+                "programmingUpdatedAt": T1,
+            },
+            [],
+        )
+    )
+    _reread_setup(
+        coordinator,
+        {"m1": m1},
+        {"m1": {"id": "m1", "programmingUpdatedAt": T1}},
+        page,
+    )
+
+    result = await coordinator._async_update_data()
+
+    assert result == {"m1": {}}  # the poll itself still succeeds
+    assert [p.name for p in m1.programs] == ["Matin"]
+    assert m1.raw["programmingUpdatedAt"] == T0
+
+
+async def test_failed_reread_does_not_adopt_a_fresh_sent_at(coordinator):
+    m1 = _module(
+        id="m1",
+        raw={
+            "typeIsWatering": True,
+            "programmingUpdatedAt": T0,
+            "programmingSentAt": T0,
+        },
+    )
+    _reread_setup(
+        coordinator,
+        {"m1": m1},
+        {
+            "m1": {
+                "id": "m1",
+                "programmingUpdatedAt": T1,
+                "programmingSentAt": T1,
+            }
+        },
+        AsyncMock(side_effect=SolemConnectionError("boom")),
+    )
+
+    await coordinator._async_update_data()
+
+    assert m1.raw["programmingUpdatedAt"] == T0
+    assert m1.raw["programmingSentAt"] == T0
+
+
+def test_programming_out_of_sync_tolerates_naive_and_aware_timestamps():
+    naive = "2026-10-02T10:00:00"
+    aware = "2026-10-02T09:00:00+00:00"
+    assert (
+        coordinator_module._programming_out_of_sync(
+            {"programmingUpdatedAt": naive, "programmingSentAt": aware}
+        )
+        is True
+    )
+    assert (
+        coordinator_module._programming_out_of_sync(
+            {"programmingUpdatedAt": aware, "programmingSentAt": naive}
+        )
+        is False
+    )
+
+
+async def test_schedule_overview_window_is_two_local_midnights(
+    hass, coordinator, freezer
+):
+    await hass.config.async_set_time_zone("Europe/Rome")
+    freezer.move_to("2026-10-24T10:00:00+00:00")  # 12:00 local, day before DST end
+    # Tomorrow (25 Oct) lasts 25 h: 23:30 is beyond a 48 h window.
+    raw = _program_raw(
+        startTimes=[1410, -1, -1, -1, -1, -1, -1, -1], stationsDuration=[600] + [0] * 11
+    )
+    coordinator.modules = {"m1": _scheduled(raw)}
+
+    starts = [o["start"] for o in coordinator.schedule_overview("m1")["occurrences"]]
+
+    assert "2026-10-25T23:30:00+01:00" in starts
+
+
+async def test_schedule_overview_pending_on_ignores_stale_rain_delays(
+    hass, coordinator, freezer
+):
+    await hass.config.async_set_time_zone("Europe/Paris")
+    freezer.move_to("2026-10-18T21:30:00+00:00")
+    coordinator.modules = {"ag1": _ag_scheduled(_ag_program_raw(0), _ag_program_raw(1))}
+    coordinator.data = {
+        "ag1": _ag_state(_ag_output(0, rain_delay=3), _ag_output(1)),
+    }
+    coordinator._status_pending["ag1"] = (True, 0, dt_util.utcnow())
+
+    overview = coordinator.schedule_overview("ag1")
+
+    assert {o["station_index"] for o in overview["occurrences"]} == {1, 2}
+
+
+async def test_schedule_overview_skips_an_undecodable_program(coordinator):
+    good = _program_raw()
+    bad = _program_raw(id="p2", name="Broken", index=2, cycle="x")
+    module = _module(
+        programs=[
+            SolemProgram(id=r["id"], name=r["name"], index=r["index"], raw=r)
+            for r in (bad, good)
+        ]
+    )
+    coordinator.modules = {"m1": module}
+
+    overview = coordinator.schedule_overview("m1")
+
+    assert [p["name"] for p in overview["programs"]] == ["Matin"]
+    assert overview["occurrences"]

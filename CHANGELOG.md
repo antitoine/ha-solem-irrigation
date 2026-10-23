@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Program schedules.** Each controller gets a *Schedule* sensor: its state is
+  the next programmed run, and its attributes list every stored program (weekly
+  days, even/odd or every-N-days cycles, start times and per-station durations,
+  or an LR-AG's watering windows) plus the runs due today and tomorrow. Edits
+  made in MySOLEM show up on the next poll. Bluetooth-only controllers get it
+  too, read from MySOLEM's copy of their programs. Read-only for now.
+  ([#3](https://github.com/antitoine/ha-solem-irrigation/issues/3))
+
 ### Fixed
 
 - The live tests (`pytest -m integration`) run again: the test plugin's resolver

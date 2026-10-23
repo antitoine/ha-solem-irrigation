@@ -17,6 +17,7 @@ from custom_components.solem_irrigation.coordinator import (
     SolemFlowMeter,
     SolemFlowReading,
     SolemModule,
+    SolemProgram,
     SolemRainGauge,
     SolemRainReading,
     SolemStation,
@@ -28,6 +29,7 @@ from custom_components.solem_irrigation.sensor import (
     SolemLastCommunicationSensor,
     SolemRainfallSensor,
     SolemRunningStationSensor,
+    SolemScheduleSensor,
     SolemTurbineFlowRateSensor,
     SolemTurbineWaterUsedTodaySensor,
     SolemWaterFlowRateSensor,
@@ -588,3 +590,98 @@ async def test_async_setup_entry_adds_rainfall_sensor(coordinator, module):
     await async_setup_entry(MagicMock(), entry, added.extend)
 
     assert "m1_rainfall_r1" in {s.unique_id for s in added}
+
+
+# -- schedule -----------------------------------------------------------------
+
+
+def test_schedule_sensor_state_and_attributes(coordinator, module):
+    next_run = datetime(2026, 10, 19, 6, 0, tzinfo=dt_util.UTC)
+    coordinator.schedule_overview.return_value = {
+        "next_run": next_run,
+        "programs": [{"id": "p1", "name": "Matin"}],
+        "occurrences": [{"program": "Matin", "station": "Pelouse 1"}],
+        "pending_push": True,
+    }
+    sensor = SolemScheduleSensor(coordinator, module)
+
+    assert sensor.unique_id == "m1_schedule"
+    assert sensor.device_class is SensorDeviceClass.TIMESTAMP
+    assert sensor.native_value == next_run
+    attributes = sensor.extra_state_attributes
+    assert "next_run" not in attributes
+    assert attributes["programs"] == [{"id": "p1", "name": "Matin"}]
+    assert attributes["pending_push"] is True
+    # The runs change with the clock; they are not worth recording.
+    assert "occurrences" in sensor._unrecorded_attributes
+    coordinator.schedule_overview.assert_called_with("m1")
+
+
+def test_schedule_sensor_computes_the_overview_once_per_update(coordinator, module):
+    first = {"next_run": None, "programs": [], "pending_push": False}
+    second = {"next_run": None, "programs": [{"id": "p1"}], "pending_push": True}
+    coordinator.schedule_overview.side_effect = [first, second]
+    sensor = SolemScheduleSensor(coordinator, module)
+    sensor.async_write_ha_state = MagicMock()
+
+    assert sensor.native_value is None
+    assert sensor.extra_state_attributes["programs"] == []
+    assert coordinator.schedule_overview.call_count == 1
+
+    sensor._handle_coordinator_update()
+
+    assert sensor.extra_state_attributes["programs"] == [{"id": "p1"}]
+    assert sensor.native_value is None
+    assert coordinator.schedule_overview.call_count == 2
+    sensor.async_write_ha_state.assert_called_once()
+
+
+def test_schedule_sensor_without_a_next_run_is_blank(coordinator, module):
+    coordinator.schedule_overview.return_value = {"next_run": None, "programs": []}
+
+    assert SolemScheduleSensor(coordinator, module).native_value is None
+
+
+async def test_setup_adds_schedule_sensor_for_bluetooth_only_module(coordinator):
+    """MySOLEM still holds a Bluetooth-only controller's programs."""
+    bluetooth = SolemModule(
+        id="b1",
+        name="Tennis",
+        serial="SERB",
+        type="bl-ip",
+        display_type="BL-IP",
+        raw={"typeIsWatering": True, "isBluetoothOnly": True},
+        stations=[STATION_1],
+        programs=[SolemProgram(id="p1", name="Matin", index=1)],
+    )
+    coordinator.modules = {"b1": bluetooth}
+    coordinator.relevant_module_ids.return_value = set()
+    entry = MagicMock()
+    entry.runtime_data = coordinator
+    added: list = []
+
+    await async_setup_entry(MagicMock(), entry, added.extend)
+
+    assert [s.unique_id for s in added] == ["b1_schedule"]
+
+
+async def test_no_schedule_sensor_without_programs_or_for_pool(coordinator, module):
+    pool = SolemModule(
+        id="pool",
+        name="Pool",
+        serial="SERP",
+        type="LR-PC",
+        display_type="LR-PC",
+        raw={"typeIsWatering": False},
+        stations=[STATION_1],
+        programs=[SolemProgram(id="p1", name="Filtration", index=1)],
+    )
+    coordinator.modules = {module.id: module, "pool": pool}  # module: no programs
+    coordinator.relevant_module_ids.return_value = {"m1", "pool"}
+    entry = MagicMock()
+    entry.runtime_data = coordinator
+    added: list = []
+
+    await async_setup_entry(MagicMock(), entry, added.extend)
+
+    assert not any(s.unique_id.endswith("_schedule") for s in added)
