@@ -609,38 +609,38 @@ AIR_MOISTURE = SolemWeatherProbe(
 )
 
 
-@pytest.mark.parametrize(
-    ("probe", "value", "key", "device_class", "unit", "precision"),
-    [
+# Each kind, as (newest reading, translation key, device class, unit, precision).
+WEATHER_KINDS = [
+    (
+        THERMOMETER,
         (
-            THERMOMETER,
             5.17,
             "probe_temperature",
             SensorDeviceClass.TEMPERATURE,
             UnitOfTemperature.CELSIUS,
             1,
         ),
+    ),
+    (
+        ANEMOMETER,
         (
-            ANEMOMETER,
             11.8,
             "probe_wind_speed",
             SensorDeviceClass.WIND_SPEED,
             UnitOfSpeed.KILOMETERS_PER_HOUR,
             1,
         ),
-        (
-            AIR_MOISTURE,
-            85.85,
-            "probe_humidity",
-            SensorDeviceClass.HUMIDITY,
-            PERCENTAGE,
-            0,
-        ),
-    ],
-)
-def test_weather_probe_value_and_metadata(
-    coordinator, module, probe, value, key, device_class, unit, precision
-):
+    ),
+    (
+        AIR_MOISTURE,
+        (85.85, "probe_humidity", SensorDeviceClass.HUMIDITY, PERCENTAGE, 0),
+    ),
+]
+
+
+@pytest.mark.parametrize(("probe", "expected"), WEATHER_KINDS)
+def test_weather_probe_value_and_metadata(coordinator, module, probe, expected):
+    value, key, device_class, unit, precision = expected
     coordinator.weather_reading.return_value = SolemWeatherReading(
         value=value,
         timestamp=dt_util.parse_datetime("2026-11-01T04:22:01+00:00"),
