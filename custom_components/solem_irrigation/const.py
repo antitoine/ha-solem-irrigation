@@ -105,6 +105,24 @@ INPUT_TYPE_RAIN_SENSOR = 2
 # the MySOLEM screen. A tick of 0 follows the last one with water.
 INPUT_TYPE_TURBINE = 33
 
+# The weather probes of a sensor module (an LR-MS carries all three). Unlike
+# every kind above, these neither count nor measure flow: each tick is simply
+# what the probe read at that moment (``typeIsCumulativeData: false``), and
+# SOLEM flags two of them in the input record itself
+# (``typeIsTemperatureSensor``, ``typeIsMoistureSensor``). Read against a real
+# LR-MS: type 5 "Thermometer" 5.17 (``unit`` 2, degrees Celsius), type 10
+# "Anemometer" 11.8 (``unit`` 11, km/h as confirmed on the MySOLEM screen, and
+# its own ``highThreshold`` is 30), type 20 "Air moisture sensor" 85.8
+# (``unit`` 10, percent).
+INPUT_TYPE_THERMOMETER = 5
+INPUT_TYPE_ANEMOMETER = 10
+INPUT_TYPE_AIR_MOISTURE = 20
+
+# The probes above, as one set: what tells a weather input from the counters.
+WEATHER_INPUT_TYPES = frozenset(
+    {INPUT_TYPE_THERMOMETER, INPUT_TYPE_ANEMOMETER, INPUT_TYPE_AIR_MOISTURE}
+)
+
 # What MySOLEM does to the controllers linked to a rain gauge once its daily
 # threshold is crossed (``actionWhenHighDailyThresholdExceeded``). Only the codes
 # a user has matched against the MySOLEM screen are named (#8); any other is
@@ -183,6 +201,12 @@ DEFAULT_INPUT_INTERVAL = 1
 # How far back to ask for ticks when deriving the current flow rate. Only needs
 # to cover a couple of ticks; a wider window is just a bigger response.
 FLOW_WINDOW = timedelta(minutes=15)
+
+# How far back to ask for ticks on a module carrying weather probes. They report
+# every 10 to 15 minutes, so ``FLOW_WINDOW`` would often come back empty and
+# leave a measurement unknown for a whole poll; a few intervals of slack cost
+# nothing, since it is the same single fetch.
+WEATHER_WINDOW = timedelta(hours=2)
 
 # Treat the meter as idle once its newest tick is older than this. Must stay at
 # or above the poll interval: ticks reach the cloud with ~80s of upload lag, so

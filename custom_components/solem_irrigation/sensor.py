@@ -10,7 +10,10 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import (
+    PERCENTAGE,
     UnitOfPrecipitationDepth,
+    UnitOfSpeed,
+    UnitOfTemperature,
     UnitOfVolume,
     UnitOfVolumeFlowRate,
 )
@@ -19,7 +22,13 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import INPUT_UNIT_GALLON, LAST_COMMUNICATION_KEYS
+from .const import (
+    INPUT_TYPE_AIR_MOISTURE,
+    INPUT_TYPE_ANEMOMETER,
+    INPUT_TYPE_THERMOMETER,
+    INPUT_UNIT_GALLON,
+    LAST_COMMUNICATION_KEYS,
+)
 from .coordinator import (
     SolemConfigEntry,
     SolemDataUpdateCoordinator,
@@ -29,8 +38,33 @@ from .coordinator import (
     SolemRainGauge,
     SolemTurbine,
     SolemTurbineReading,
+    SolemWeatherProbe,
 )
 from .entity import SolemModuleEntity
+
+# What each weather probe measures, keyed by its input type: translation key,
+# device class, unit and display precision. The cloud scales every tick itself,
+# so the unit here only names what already arrives.
+WEATHER_PROBE_KINDS: dict[int, tuple[str, SensorDeviceClass, str, int]] = {
+    INPUT_TYPE_THERMOMETER: (
+        "probe_temperature",
+        SensorDeviceClass.TEMPERATURE,
+        UnitOfTemperature.CELSIUS,
+        1,
+    ),
+    INPUT_TYPE_ANEMOMETER: (
+        "probe_wind_speed",
+        SensorDeviceClass.WIND_SPEED,
+        UnitOfSpeed.KILOMETERS_PER_HOUR,
+        1,
+    ),
+    INPUT_TYPE_AIR_MOISTURE: (
+        "probe_humidity",
+        SensorDeviceClass.HUMIDITY,
+        PERCENTAGE,
+        0,
+    ),
+}
 
 
 async def async_setup_entry(
@@ -66,6 +100,10 @@ async def async_setup_entry(
                 SolemTurbineWaterUsedTodaySensor(coordinator, module, turbine)
             )
             entities.append(SolemTurbineFlowRateSensor(coordinator, module, turbine))
+        entities.extend(
+            SolemWeatherProbeSensor(coordinator, module, probe)
+            for probe in module.weather_probes
+        )
     async_add_entities(entities)
 
 
@@ -468,4 +506,62 @@ class SolemRainfallSensor(SolemModuleEntity, SensorEntity):
             "raw_value": reading.raw_total,
             "last_measurement": reading.timestamp.isoformat(),
             "faulty_probe": record.get("hasFaultyProbe"),
+        }
+
+
+class SolemWeatherProbeSensor(SolemModuleEntity, SensorEntity):
+    """What a weather probe on a sensor module last measured.
+
+    One class for the thermometer, the anemometer and the air-moisture probe:
+    the cloud scales every tick, so only the unit and the device class differ,
+    and both follow from the input's type.
+
+    A plain measurement, unlike the counters next to it on the same module: it
+    is the newest tick, and it stands until the probe reports again -- a quarter
+    of an hour at worst, longer while the module is unreachable.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        coordinator: SolemDataUpdateCoordinator,
+        module: SolemModule,
+        probe: SolemWeatherProbe,
+    ) -> None:
+        """Initialise the sensor for ``probe``."""
+        super().__init__(coordinator, module)
+        self._probe_id = probe.id
+        key, device_class, unit, precision = WEATHER_PROBE_KINDS[probe.type]
+        self._attr_translation_key = key
+        self._attr_device_class = device_class
+        self._attr_native_unit_of_measurement = unit
+        self._attr_suggested_display_precision = precision
+        self._attr_unique_id = f"{module.id}_{key}_{probe.id}"
+        # Named through a placeholder for the same reason as the flow meters.
+        self._attr_translation_placeholders = {"probe": probe.name}
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the newest measurement, or None until the first tick."""
+        reading = self.coordinator.weather_reading(self._probe_id)
+        return reading.value if reading else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object] | None:
+        """Expose when it was measured, plus SOLEM's own flags for the probe.
+
+        ``high_threshold`` is the limit MySOLEM alerts on (30 km/h on the
+        anemometer of the LR-MS this was read against), and None where the user
+        has set none.
+        """
+        reading = self.coordinator.weather_reading(self._probe_id)
+        if reading is None:
+            return None
+        record = self.coordinator.input_record(self._probe_id) or {}
+        return {
+            "probe_id": self._probe_id,
+            "last_measurement": reading.timestamp.isoformat(),
+            "faulty_probe": record.get("hasFaultyProbe"),
+            "high_threshold": record.get("highThreshold"),
         }

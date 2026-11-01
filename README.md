@@ -61,6 +61,9 @@ own device with:
 
 | Entity | What it does |
 | --- | --- |
+| **Sensor** *&lt;probe&gt; temperature* | What a thermometer probe (thermomètre) on the module last read, in °C. |
+| **Sensor** *&lt;probe&gt; wind speed* | What an anemometer (anémomètre) last read, in km/h. Attributes include the high threshold MySOLEM alerts on. |
+| **Sensor** *&lt;probe&gt; humidity* | What an air-moisture probe (capteur d'humidité de l'air) last read, in %. |
 | **Sensor** *&lt;gauge&gt; rainfall* | SOLEM's lifetime rainfall total, in mm. For rain per day or week, point a [`utility_meter`](https://www.home-assistant.io/integrations/utility_meter/) at it. |
 | **Binary sensor** *&lt;gauge&gt; rain threshold* | SOLEM's own "beyond thresholds" flag for the gauge, shown as-is — turns on when the day's rainfall crosses the threshold set in MySOLEM, and has been seen to stay on for days after. Attributes: the daily threshold, the action MySOLEM takes when it is exceeded (e.g. *Off for 2 days*), and when it last fired. To know whether watering is held *right now*, read the controllers' *Irrigation enabled* and *Rain delay* instead. |
 
@@ -151,6 +154,14 @@ pool integration, not this one.)
   meter only records a reading while water actually flows, so *flow rate* is
   derived from the last minutes of readings; it reads `0` when idle and can be
   briefly unknown in the first minute of a run.
+- A **weather probe** on a sensor module — thermometer, anemometer,
+  air-moisture — is a plain measurement, not a counter: the value is the
+  probe's newest reading, and it stands until the next one. They report every
+  10 to 15 minutes, so a reading is normally a few minutes old, and it holds
+  (rather than blanking) while the module is unreachable. The *Last
+  communication* sensor on the module is what tells you the readings have
+  stopped being current. MySOLEM scales every reading itself, which is how an
+  anemometer whose conversion curve is JavaScript still arrives in km/h.
 - A **turbine** flow meter (an LR-IP-ECO's) keeps no running total: it reports
   the flow, once a minute while water runs, and a `0` when it stops. So its
   *water used today* adds up the day's readings, as MySOLEM's own charts do,
