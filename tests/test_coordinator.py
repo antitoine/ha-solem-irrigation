@@ -39,13 +39,16 @@ from custom_components.solem_irrigation.coordinator import (
     SolemStation,
     SolemTurbine,
     SolemTurbineReading,
+    SolemWeatherProbe,
     _build_flow_meters,
     _build_rain_gauges,
     _build_rain_sensors,
     _build_turbines,
+    _build_weather_probes,
     _compute_flow_rate,
     _compute_turbine_reading,
     _find_by_token,
+    _weather_reading,
 )
 
 FLOW_INPUT = {
@@ -2656,3 +2659,205 @@ async def test_schedule_overview_skips_an_undecodable_program(coordinator):
 
     assert [p["name"] for p in overview["programs"]] == ["Matin"]
     assert overview["occurrences"]
+
+
+# -- weather probes -----------------------------------------------------------
+
+THERMOMETER_INPUT = {
+    "id": "w1",
+    "name": "Thermometer",
+    "type": 5,
+    "unit": 2,
+    "index": 4,
+    "interval": 15,
+    "expression": "x/100.0",
+    "getName": "Thermomètre",
+}
+ANEMOMETER_INPUT = {
+    "id": "w2",
+    "name": "Anemometer",
+    "type": 10,
+    "unit": 11,
+    "index": 2,
+    "interval": 10,
+    # A JavaScript curve, like the turbine's: unscalable here, and it does not
+    # have to be, since the windowed ticks arrive already scaled.
+    "expression": "javascript:if(x==0){0}else{((x*0.8)/1000.0)+3.0}",
+    "getName": "Anémomètre",
+}
+AIR_MOISTURE_INPUT = {
+    "id": "w3",
+    "name": "",
+    "type": 20,
+    "unit": 10,
+    "index": 3,
+    "interval": 15,
+    "expression": "javascript:var v=x*5.0/3.5;if(v<=1030){0}else{100}",
+    "getName": "Capteur d'humidité de l'air",
+}
+
+
+def _probe_record(input_id="w1", ticks=(("2026-11-01T04:22:01.000Z", 5.17),), **extra):
+    return {
+        "id": input_id,
+        "computedSensorData": [
+            {"tickTimestamp": timestamp, "value": value, **extra}
+            for timestamp, value in ticks
+        ],
+    }
+
+
+def test_build_weather_probes_keeps_only_the_three_types_in_index_order():
+    probes = _build_weather_probes(
+        [
+            dict(THERMOMETER_INPUT),
+            dict(TURBINE_INPUT),
+            dict(AIR_MOISTURE_INPUT),
+            dict(RAIN_INPUT),
+            dict(ANEMOMETER_INPUT),
+        ]
+    )
+    assert probes == [
+        # Unscalable expression and all: the cloud has already applied it.
+        SolemWeatherProbe(
+            id="w2", name="Anemometer", index=2, type=10, raw=ANEMOMETER_INPUT
+        ),
+        # A blank label falls back to SOLEM's own.
+        SolemWeatherProbe(
+            id="w3",
+            name="Capteur d'humidité de l'air",
+            index=3,
+            type=20,
+            raw=AIR_MOISTURE_INPUT,
+        ),
+        SolemWeatherProbe(
+            id="w1", name="Thermometer", index=4, type=5, raw=THERMOMETER_INPUT
+        ),
+    ]
+
+
+def test_build_weather_probes_skips_a_record_without_an_id():
+    assert _build_weather_probes([{**THERMOMETER_INPUT, "id": ""}]) == []
+
+
+def test_weather_reading_takes_the_newest_tick_as_it_arrives():
+    reading = _weather_reading(
+        _probe_record(
+            ticks=(
+                ("2026-11-01T04:07:00.000Z", 4.91),
+                ("2026-11-01T04:22:01.000Z", 5.17),
+            )
+        )
+    )
+    assert reading.value == 5.17
+    assert reading.timestamp == _at("2026-11-01T04:22:01+00:00")
+
+
+def test_weather_reading_rounds_the_clouds_float_artefact():
+    record = _probe_record(ticks=(("2026-11-01T04:37:00.000Z", 85.84543082728862),))
+    assert _weather_reading(record).value == 85.85
+
+
+def test_weather_reading_is_none_without_a_usable_tick():
+    assert _weather_reading({"id": "w1", "computedSensorData": []}) is None
+    # Interpolated ticks are the cloud's own invention, never a measurement.
+    assert _weather_reading(_probe_record(interpolated=True)) is None
+
+
+def test_weather_reading_is_none_when_the_timestamp_is_unparseable():
+    record = {
+        "id": "w1",
+        "computedSensorData": [{"tickTimestamp": "not-a-date", "value": 5.17}],
+    }
+    assert _weather_reading(record) is None
+
+
+async def test_weather_probe_module_is_relevant(coordinator):
+    """A sensor module with only weather probes is ours, like a gauge's."""
+    coordinator.modules = {
+        "ms": _module(
+            id="ms",
+            raw={"typeIsWatering": False},
+            stations=[],
+            programs=[],
+            weather_probes=_build_weather_probes([dict(THERMOMETER_INPUT)]),
+        )
+    }
+    coordinator.data = {"ms": {}}
+    assert coordinator.relevant_module_ids() == {"ms"}
+
+
+async def test_poll_widens_the_window_and_reads_every_probe(hass, coordinator, freezer):
+    freezer.move_to("2026-11-01T04:40:00+00:00")
+    window = AsyncMock(
+        return_value=[
+            _probe_record("w1", ticks=(("2026-11-01T04:22:01.000Z", 5.17),)),
+            _probe_record("w2", ticks=(("2026-11-01T04:27:00.000Z", 11.8),)),
+            _probe_record("w3", ticks=(("2026-11-01T04:37:00.000Z", 85.8),)),
+        ]
+    )
+    coordinator.modules = {
+        "m1": _module(
+            weather_probes=_build_weather_probes(
+                [
+                    dict(THERMOMETER_INPUT),
+                    dict(ANEMOMETER_INPUT),
+                    dict(AIR_MOISTURE_INPUT),
+                ]
+            )
+        )
+    }
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = window
+    coordinator.client.async_get_last_input_tick = AsyncMock(return_value={})
+
+    await coordinator._async_update_data()
+
+    # Two hours back, not the quarter of an hour a flow rate needs: a probe
+    # reporting every 15 minutes would otherwise fall outside the window.
+    window.assert_awaited_once_with(
+        "m1", "2026-11-01T02:40:00Z", "2026-11-01T04:40:00Z"
+    )
+    assert coordinator.weather_reading("w1").value == 5.17
+    assert coordinator.weather_reading("w2").value == 11.8
+    assert coordinator.weather_reading("w3").value == 85.8
+    # A probe's raw newest tick is never asked for.
+    coordinator.client.async_get_last_input_tick.assert_not_awaited()
+
+
+async def test_poll_keeps_the_previous_weather_reading_when_a_probe_is_silent(
+    coordinator,
+):
+    coordinator.modules = {
+        "m1": _module(weather_probes=_build_weather_probes([dict(THERMOMETER_INPUT)]))
+    }
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_last_input_tick = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = AsyncMock(
+        return_value=[_probe_record("w1")]
+    )
+    await coordinator._async_update_data()
+
+    # The window answers for the input but holds no tick, as it does while the
+    # module is unreachable. The measurement must not flicker to unknown.
+    coordinator.client.async_get_module_sensor_data = AsyncMock(
+        return_value=[{"id": "w1", "computedSensorData": []}]
+    )
+    await coordinator._async_update_data()
+
+    assert coordinator.weather_reading("w1").value == 5.17
+
+
+async def test_poll_leaves_a_probe_unread_when_the_window_fetch_fails(coordinator):
+    coordinator.modules = {
+        "m1": _module(weather_probes=_build_weather_probes([dict(THERMOMETER_INPUT)]))
+    }
+    coordinator.client.async_get_module_state = AsyncMock(return_value={})
+    coordinator.client.async_get_last_input_tick = AsyncMock(return_value={})
+    coordinator.client.async_get_module_sensor_data = AsyncMock(
+        side_effect=SolemConnectionError("offline")
+    )
+
+    await coordinator._async_update_data()
+
+    assert coordinator.weather_reading("w1") is None

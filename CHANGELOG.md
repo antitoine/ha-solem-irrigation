@@ -17,10 +17,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   too, read from MySOLEM's copy of their programs. Read-only for now.
   ([#3](https://github.com/antitoine/ha-solem-irrigation/issues/3))
 
+## [0.11.0] - 2026-11-02
+
+Adds temperature, wind-speed and humidity sensors for the weather probes on a
+sensor module such as the LR-MS. Thanks to
+[@piro1971](https://github.com/piro1971) for the contribution.
+
+### Added
+
+- **Weather probes on a sensor module.** A thermometer (SOLEM input type 5),
+  an anemometer (type 10) and an air-moisture probe (type 20) — the three that
+  sit alongside the rain gauge on an LR-MS — each get a sensor:
+  *&lt;probe&gt; temperature* in °C, *&lt;probe&gt; wind speed* in km/h and
+  *&lt;probe&gt; humidity* in %, with SOLEM's `hasFaultyProbe` and high
+  threshold as attributes. They are measurements rather than counters, so the
+  value is the probe's newest reading and it holds until the next one; a probe
+  reports every 10 to 15 minutes, so the sensor window widens to two hours on
+  a module that carries one. The readings come from the cloud's windowed ticks,
+  already scaled, which is what makes an anemometer readable at all: its
+  conversion curve is JavaScript, like a turbine's, and could not be applied
+  here. A sensor module carrying only weather probes is now also recognised as
+  one of ours, as a module with only a rain gauge already was.
+  ([#21](https://github.com/antitoine/ha-solem-irrigation/pull/21),
+  [#22](https://github.com/antitoine/ha-solem-irrigation/pull/22))
+
 ### Fixed
 
 - The live tests (`pytest -m integration`) run again: the test plugin's resolver
   refused the allowed host names before any of them could start.
+  ([#19](https://github.com/antitoine/ha-solem-irrigation/pull/19))
 
 ## [0.10.0] - 2026-10-22
 
@@ -425,7 +450,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.0...v0.8.1

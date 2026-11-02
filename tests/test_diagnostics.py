@@ -26,6 +26,8 @@ from custom_components.solem_irrigation.coordinator import (
     SolemStation,
     SolemTurbine,
     SolemTurbineReading,
+    SolemWeatherProbe,
+    SolemWeatherReading,
 )
 from custom_components.solem_irrigation.diagnostics import (
     async_get_config_entry_diagnostics,
@@ -92,6 +94,9 @@ def module() -> SolemModule:
         turbines=[
             SolemTurbine(id="i3", name="Turbine", index=3, unit=1, interval=1, raw={})
         ],
+        weather_probes=[
+            SolemWeatherProbe(id="i4", name="Thermometer", index=4, type=5, raw={})
+        ],
         # Type 0 is an empty input slot, as on a real LR-IP-ECO.
         raw_inputs=[dict(FLOW_INPUT), dict(RAIN_INPUT), {"id": "i0", "type": 0}],
     )
@@ -129,6 +134,12 @@ def entry(module) -> MagicMock:
             volume_today=46.45,
             rate=0.0,
             timestamp=dt_util.parse_datetime("2026-09-21T05:43:00+00:00"),
+        )
+    }
+    coordinator.weather_readings = {
+        "i4": SolemWeatherReading(
+            value=5.17,
+            timestamp=dt_util.parse_datetime("2026-11-01T04:22:01+00:00"),
         )
     }
     coordinator.client = MagicMock()
@@ -301,6 +312,20 @@ async def test_diagnostics_includes_turbines(hass, entry):
             "volume_today": 46.45,
             "rate": 0.0,
             "timestamp": "2026-09-21T05:43:00+00:00",
+        }
+    }
+
+
+async def test_diagnostics_includes_weather_probes(hass, entry):
+    result = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert result["modules"]["m1"]["weather_probes"] == [
+        {"name": "Thermometer", "index": 4, "type": 5}
+    ]
+    assert result["weather_readings"] == {
+        "i4": {
+            "value": 5.17,
+            "timestamp": "2026-11-01T04:22:01+00:00",
         }
     }
 

@@ -106,6 +106,15 @@
       },
       "rainfall": {
         "name": "Pluviométrie {gauge}"
+      },
+      "probe_temperature": {
+        "name": "Température {probe}"
+      },
+      "probe_wind_speed": {
+        "name": "Vitesse du vent {probe}"
+      },
+      "probe_humidity": {
+        "name": "Humidité {probe}"
       }
     }
   },

@@ -55,6 +55,8 @@ from .const import (
     STORAGE_VERSION,
     TURBINE_IDLE_AFTER,
     WATERING_STATES_OFF,
+    WEATHER_INPUT_TYPES,
+    WEATHER_WINDOW,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -151,6 +153,25 @@ class SolemRainSensorReading:
     """The latest reading of a rain sensor: wet or dry, as last ticked."""
 
     wet: bool
+    timestamp: datetime
+
+
+@dataclass(slots=True)
+class SolemWeatherProbe:
+    """A weather probe on a sensor module: it measures, it does not count."""
+
+    id: str
+    name: str
+    index: int
+    type: int
+    raw: dict[str, Any]
+
+
+@dataclass(slots=True)
+class SolemWeatherReading:
+    """What a weather probe last read, in the unit SOLEM scaled it to."""
+
+    value: float
     timestamp: datetime
 
 
@@ -359,6 +380,27 @@ def _build_turbines(inputs: list[dict[str, Any]]) -> list[SolemTurbine]:
     ]
 
 
+def _build_weather_probes(inputs: list[dict[str, Any]]) -> list[SolemWeatherProbe]:
+    """Pick the weather probes out of a module's inputs, in index order.
+
+    No expression check, for the same reason as the turbines: a probe is read
+    from the cloud's windowed ticks, which already carry the scaled value, and
+    the anemometer and air-moisture curves are JavaScript that
+    :func:`apply_expression` could not scale anyway.
+    """
+    return [
+        SolemWeatherProbe(
+            id=record["id"],
+            name=_input_name(record, "Sensor"),
+            index=int(record.get("index", 0) or 0),
+            type=int(record["type"]),
+            raw=record,
+        )
+        for record in sorted(inputs, key=lambda r: int(r.get("index", 0) or 0))
+        if record.get("type") in WEATHER_INPUT_TYPES and record.get("id")
+    ]
+
+
 def _build_programs(obj: dict[str, Any]) -> list[SolemProgram]:
     return [
         SolemProgram(
@@ -388,6 +430,27 @@ def _usable_ticks(record: dict[str, Any]) -> list[dict[str, Any]]:
         and tick.get("tickTimestamp")
         and tick.get("value") is not None
     ]
+
+
+def _weather_reading(record: dict[str, Any]) -> SolemWeatherReading | None:
+    """Read a weather probe off the newest tick of its window.
+
+    Returns None when the window held no usable tick, so the caller keeps the
+    previous reading: a probe reporting every quarter of an hour is routinely
+    late for a poll, and blanking it would make the measurement flicker.
+    """
+    ticks = _usable_ticks(record)
+    if not ticks:
+        return None
+    timestamp = dt_util.parse_datetime(ticks[-1]["tickTimestamp"])
+    if timestamp is None:
+        return None
+    # Rounded like the scaled counters are, to keep float artefacts out of the
+    # recorder; the cloud answers an air-moisture tick as 85.84543082728862.
+    return SolemWeatherReading(
+        value=round(float(ticks[-1]["value"]), 2),
+        timestamp=dt_util.as_utc(timestamp),
+    )
 
 
 def _compute_flow_rate(
@@ -525,6 +588,7 @@ class SolemModule:
     rain_gauges: list[SolemRainGauge] = field(default_factory=list)
     rain_sensors: list[SolemRainSensor] = field(default_factory=list)
     turbines: list[SolemTurbine] = field(default_factory=list)
+    weather_probes: list[SolemWeatherProbe] = field(default_factory=list)
     # Every input as the cloud returned it, including the ones
     # ``_build_*`` helpers drop. Nothing reads this at runtime; it exists so
     # diagnostics can show a sensor the integration does not model yet (a
@@ -581,7 +645,11 @@ class SolemModule:
     def has_modelled_inputs(self) -> bool:
         """True when any of the module's sensors becomes an entity."""
         return bool(
-            self.flow_meters or self.rain_gauges or self.rain_sensors or self.turbines
+            self.flow_meters
+            or self.rain_gauges
+            or self.rain_sensors
+            or self.turbines
+            or self.weather_probes
         )
 
     @property
@@ -684,6 +752,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         # it, keyed by **input id**. It carries SOLEM's live flags (threshold
         # exceeded, faulty probe), which the module page only snapshots at setup.
         self.input_records: dict[str, dict[str, Any]] = {}
+        self.weather_readings: dict[str, SolemWeatherReading] = {}
         self._store: Store[dict[str, int]] = Store(
             hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry.entry_id}"
         )
@@ -788,6 +857,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                     rain_gauges=_build_rain_gauges(inputs),
                     rain_sensors=_build_rain_sensors(inputs),
                     turbines=_build_turbines(inputs),
+                    weather_probes=_build_weather_probes(inputs),
                     raw_inputs=inputs,
                 )
                 if module.is_agricultural:
@@ -799,7 +869,8 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 _LOGGER.debug(
                     "Discovered module %s: name=%s type=%s outputs=%d "
                     "programs=%d inputs=%d input_types=%s flow_meters=%d "
-                    "rain_gauges=%d rain_sensors=%d turbines=%d controller=%s",
+                    "rain_gauges=%d rain_sensors=%d turbines=%d "
+                    "weather_probes=%d controller=%s",
                     module_id,
                     module.name,
                     module.type,
@@ -817,6 +888,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                     len(module.rain_gauges),
                     len(module.rain_sensors),
                     len(module.turbines),
+                    len(module.weather_probes),
                     module.is_controller,
                 )
             self.modules = modules
@@ -985,7 +1057,10 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         cloud always answers with, however old it is), while a flow rate is
         derived from a short window of ticks. A turbine has no total to read,
         so for a module carrying one the window reaches back to local midnight
-        and the day's ticks are added up. On failure the previous reading is
+        and the day's ticks are added up. A weather probe has no total either:
+        its newest windowed tick *is* the measurement, already scaled, and the
+        window widens to cover the quarter-hour it may report on. On failure
+        the previous reading is
         kept: blanking a cumulative sensor punches a hole in long-term
         statistics.
         """
@@ -995,6 +1070,8 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         start = now - FLOW_WINDOW
         if module.turbines:
             start = min(start, dt_util.as_utc(day_start))
+        if module.weather_probes:
+            start = min(start, now - WEATHER_WINDOW)
         try:
             records = await self.client.async_get_module_sensor_data(
                 module_id,
@@ -1043,6 +1120,8 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 wet=raw_value != 0, timestamp=timestamp
             )
 
+        self._read_weather_probes(module, by_id)
+
         for turbine in module.turbines:
             # No record means the window fetch failed. Keep the last reading
             # rather than let today's total drop to nothing.
@@ -1055,6 +1134,21 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                 turbine.interval,
                 self.turbine_readings.get(turbine.id),
             )
+
+    def _read_weather_probes(
+        self, module: SolemModule, by_id: dict[str, dict[str, Any]]
+    ) -> None:
+        """Store each weather probe's newest reading, already scaled.
+
+        A probe missing from the window, or silent throughout it, keeps
+        whatever it last read: it reports every quarter of an hour at best, and
+        a measurement that blanked between polls would be unusable.
+        """
+        for probe in module.weather_probes:
+            if (record := by_id.get(probe.id)) is None:
+                continue
+            if (reading := _weather_reading(record)) is not None:
+                self.weather_readings[probe.id] = reading
 
     async def _async_last_tick(
         self, input_id: str, expression: str
@@ -1096,6 +1190,10 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         """Return the latest reading for a turbine, if one has been computed."""
         return self.turbine_readings.get(turbine_id)
 
+    def weather_reading(self, probe_id: str) -> SolemWeatherReading | None:
+        """Return the latest reading for a weather probe, if one has arrived."""
+        return self.weather_readings.get(probe_id)
+
     def input_record(self, input_id: str) -> dict[str, Any] | None:
         """Return an input's record as last polled, if it has been."""
         return self.input_records.get(input_id)
@@ -1113,7 +1211,7 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         type, so those are admitted on the strength of what they measure: a flow
         meter (lr-fl and friends -- untested, as I only have the
         controller-attached topology), a rain gauge (the LR-MS, #8), a rain
-        sensor or a turbine.
+        sensor, a turbine or a weather probe.
 
         Nothing Bluetooth-only is owned: the cloud cannot reach it.
         """
