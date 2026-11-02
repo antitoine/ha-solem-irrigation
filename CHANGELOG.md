@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Weather probes on a sensor module.** A thermometer (SOLEM input type 5),
+  an anemometer (type 10) and an air-moisture probe (type 20) — the three that
+  sit alongside the rain gauge on an LR-MS — each get a sensor:
+  *&lt;probe&gt; temperature* in °C, *&lt;probe&gt; wind speed* in km/h and
+  *&lt;probe&gt; humidity* in %, with SOLEM's `hasFaultyProbe` and high
+  threshold as attributes. They are measurements rather than counters, so the
+  value is the probe's newest reading and it holds until the next one; a probe
+  reports every 10 to 15 minutes, so the sensor window widens to two hours on
+  a module that carries one. The readings come from the cloud's windowed ticks,
+  already scaled, which is what makes an anemometer readable at all: its
+  conversion curve is JavaScript, like a turbine's, and could not be applied
+  here. A sensor module carrying only weather probes is now also recognised as
+  one of ours, as a module with only a rain gauge already was.
+
 ### Fixed
 
 - The live tests (`pytest -m integration`) run again: the test plugin's resolver

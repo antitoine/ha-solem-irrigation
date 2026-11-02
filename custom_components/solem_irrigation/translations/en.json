@@ -103,6 +103,15 @@
       },
       "rainfall": {
         "name": "{gauge} rainfall"
+      },
+      "probe_temperature": {
+        "name": "{probe} temperature"
+      },
+      "probe_wind_speed": {
+        "name": "{probe} wind speed"
+      },
+      "probe_humidity": {
+        "name": "{probe} humidity"
       }
     }
   },

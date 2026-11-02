@@ -6,7 +6,10 @@ from unittest.mock import MagicMock
 import pytest
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import (
+    PERCENTAGE,
     UnitOfPrecipitationDepth,
+    UnitOfSpeed,
+    UnitOfTemperature,
     UnitOfVolume,
     UnitOfVolumeFlowRate,
 )
@@ -22,6 +25,8 @@ from custom_components.solem_irrigation.coordinator import (
     SolemStation,
     SolemTurbine,
     SolemTurbineReading,
+    SolemWeatherProbe,
+    SolemWeatherReading,
 )
 from custom_components.solem_irrigation.sensor import (
     SolemBatterySensor,
@@ -32,6 +37,7 @@ from custom_components.solem_irrigation.sensor import (
     SolemTurbineWaterUsedTodaySensor,
     SolemWaterFlowRateSensor,
     SolemWaterUsedSensor,
+    SolemWeatherProbeSensor,
     async_setup_entry,
 )
 
@@ -588,3 +594,109 @@ async def test_async_setup_entry_adds_rainfall_sensor(coordinator, module):
     await async_setup_entry(MagicMock(), entry, added.extend)
 
     assert "m1_rainfall_r1" in {s.unique_id for s in added}
+
+
+# -- weather probes -----------------------------------------------------------
+
+THERMOMETER = SolemWeatherProbe(
+    id="w1", name="Thermometer", index=4, type=5, raw={"id": "w1"}
+)
+ANEMOMETER = SolemWeatherProbe(
+    id="w2", name="Anemometer", index=2, type=10, raw={"id": "w2"}
+)
+AIR_MOISTURE = SolemWeatherProbe(
+    id="w3", name="Air moisture sensor", index=3, type=20, raw={"id": "w3"}
+)
+
+
+# Each kind, as (newest reading, translation key, device class, unit, precision).
+WEATHER_KINDS = [
+    (
+        THERMOMETER,
+        (
+            5.17,
+            "probe_temperature",
+            SensorDeviceClass.TEMPERATURE,
+            UnitOfTemperature.CELSIUS,
+            1,
+        ),
+    ),
+    (
+        ANEMOMETER,
+        (
+            11.8,
+            "probe_wind_speed",
+            SensorDeviceClass.WIND_SPEED,
+            UnitOfSpeed.KILOMETERS_PER_HOUR,
+            1,
+        ),
+    ),
+    (
+        AIR_MOISTURE,
+        (85.85, "probe_humidity", SensorDeviceClass.HUMIDITY, PERCENTAGE, 0),
+    ),
+]
+
+
+@pytest.mark.parametrize(("probe", "expected"), WEATHER_KINDS)
+def test_weather_probe_value_and_metadata(coordinator, module, probe, expected):
+    value, key, device_class, unit, precision = expected
+    coordinator.weather_reading.return_value = SolemWeatherReading(
+        value=value,
+        timestamp=dt_util.parse_datetime("2026-11-01T04:22:01+00:00"),
+    )
+    coordinator.input_record.return_value = {
+        "hasFaultyProbe": False,
+        "highThreshold": 30,
+    }
+    sensor = SolemWeatherProbeSensor(coordinator, module, probe)
+
+    assert sensor.unique_id == f"m1_{key}_{probe.id}"
+    assert sensor.translation_key == key
+    assert sensor.native_value == value
+    assert sensor.device_class == device_class
+    # A measurement, not a counter: the probe reads, it does not accumulate.
+    assert sensor.state_class == SensorStateClass.MEASUREMENT
+    assert sensor.native_unit_of_measurement == unit
+    assert sensor.suggested_display_precision == precision
+    assert sensor.translation_placeholders == {"probe": probe.name}
+    assert sensor.extra_state_attributes == {
+        "probe_id": probe.id,
+        "last_measurement": "2026-11-01T04:22:01+00:00",
+        "faulty_probe": False,
+        "high_threshold": 30,
+    }
+
+
+def test_weather_probe_unknown_before_the_first_tick(coordinator, module):
+    coordinator.weather_reading.return_value = None
+    sensor = SolemWeatherProbeSensor(coordinator, module, THERMOMETER)
+    assert sensor.native_value is None
+    assert sensor.extra_state_attributes is None
+
+
+def test_weather_probe_without_a_threshold_reports_none(coordinator, module):
+    coordinator.weather_reading.return_value = SolemWeatherReading(
+        value=5.17, timestamp=dt_util.parse_datetime("2026-11-01T04:22:01+00:00")
+    )
+    coordinator.input_record.return_value = None
+    sensor = SolemWeatherProbeSensor(coordinator, module, THERMOMETER)
+    attributes = sensor.extra_state_attributes
+    assert attributes["high_threshold"] is None
+    assert attributes["faulty_probe"] is None
+
+
+async def test_async_setup_entry_adds_one_sensor_per_weather_probe(coordinator, module):
+    module.weather_probes = [ANEMOMETER, AIR_MOISTURE, THERMOMETER]
+    coordinator.relevant_module_ids.return_value = {"m1"}
+    entry = MagicMock()
+    entry.runtime_data = coordinator
+    added: list = []
+
+    await async_setup_entry(MagicMock(), entry, added.extend)
+
+    assert {
+        "m1_probe_wind_speed_w2",
+        "m1_probe_humidity_w3",
+        "m1_probe_temperature_w1",
+    } <= {s.unique_id for s in added}
