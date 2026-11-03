@@ -86,6 +86,9 @@
       "running_station": {
         "name": "Watering station"
       },
+      "schedule": {
+        "name": "Schedule"
+      },
       "last_communication": {
         "name": "Last communication"
       },

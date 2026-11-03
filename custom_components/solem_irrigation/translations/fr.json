@@ -86,6 +86,9 @@
       "running_station": {
         "name": "Station en cours"
       },
+      "schedule": {
+        "name": "Programmation"
+      },
       "last_communication": {
         "name": "Dernière communication"
       },

@@ -58,11 +58,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: SolemConfigEntry) -> boo
 
     # Up to 0.9.0b1 a Bluetooth-only controller got a full set of entities, none
     # of which could read or command it. Drop its device, and with it those
-    # entities, rather than leave them looking alive.
+    # entities, rather than leave them looking alive. One with stored programs
+    # keeps its device, as its schedule sensor lives there; the leftover
+    # entities are removed by `_async_cleanup_legacy_entities` instead.
     for module in coordinator.modules.values():
-        if module.is_bluetooth_only and (
-            device := device_registry.async_get_device_by_identifier(
-                (DOMAIN, module.id), entry.entry_id
+        if (
+            module.is_bluetooth_only
+            and not module.has_schedule
+            and (
+                device := device_registry.async_get_device_by_identifier(
+                    (DOMAIN, module.id), entry.entry_id
+                )
             )
         ):
             device_registry.async_update_device(
@@ -107,12 +113,20 @@ def _async_cleanup_legacy_entities(
         for module in entry.runtime_data.modules.values()
         if not module.raw.get("isBattery")
     }
+    # Entities a Bluetooth-only controller was given before it was left out, bar
+    # its schedule sensor, which is the one entity it still has.
+    bluetooth = tuple(
+        f"{module.id}_"
+        for module in entry.runtime_data.modules.values()
+        if module.is_bluetooth_only
+    )
     for entity in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
         unique_id = entity.unique_id
         if (
             unique_id.endswith(_LEGACY_UNIQUE_ID_SUFFIXES)
             or any(token in unique_id for token in _LEGACY_UNIQUE_ID_SUBSTRINGS)
             or unique_id in stale_battery
+            or (unique_id.startswith(bluetooth) and not unique_id.endswith("_schedule"))
         ):
             entity_registry.async_remove(entity.entity_id)
 
@@ -128,7 +142,10 @@ async def async_remove_config_entry_device(
     no controller relays through anymore stops being exposed either way. One
     still exposed is refused: setup would only register it again.
     """
-    exposed = entry.runtime_data.relevant_module_ids()
+    coordinator = entry.runtime_data
+    exposed = coordinator.relevant_module_ids() | {
+        module.id for module in coordinator.modules.values() if module.has_schedule
+    }
     return not any(
         domain == DOMAIN and module_id in exposed
         for domain, module_id in device_entry.identifiers
