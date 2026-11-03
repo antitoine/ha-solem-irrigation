@@ -114,6 +114,39 @@ def test_program_is_enabled_weekly_mask_convention():
     )
 
 
+def test_program_is_enabled_needs_runnable_content():
+    # An untouched factory slot, as stored by MySOLEM on an LR-IS: all days,
+    # no start time, every duration 0. It can never fire.
+    factory = classic_program(
+        name="Programme C",
+        index=2,
+        cycle=schedule.CYCLE_WEEKLY,
+        weekDays=127,
+        waterBudget=100,
+        startTimes=[-1] * 8,
+        stationsDuration=[0] * 12,
+    )
+    assert program_is_enabled(factory) is False
+    summary = program_summary(factory, agricultural=False)
+    assert summary["enabled"] is False
+    assert summary["start_times"] == []
+    assert summary["durations"] == {}
+    # A start time without any duration, or a duration without a start,
+    # is just as empty.
+    assert not program_is_enabled(classic_program(stationsDuration=[0] * 12))
+    assert not program_is_enabled(classic_program(startTimes=[-1] * 8))
+    # A zero water budget never waters.
+    assert not program_is_enabled(classic_program(waterBudget=0))
+    # LR-AG: a window is the runnable content.
+    assert program_is_enabled(ag_program())
+    empty_windows = [{"start": -1, "end": -1, "on": 0, "off": 0}] * 4
+    assert not program_is_enabled(ag_program(windows=empty_windows))
+    assert (
+        program_summary(ag_program(windows=empty_windows), agricultural=True)["enabled"]
+        is False
+    )
+
+
 def test_program_runs_on_weekly():
     # Monday-only mask (bit 0). 2026-07-06 is a Monday.
     program = classic_program(weekDays=1)

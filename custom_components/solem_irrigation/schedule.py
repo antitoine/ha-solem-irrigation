@@ -102,16 +102,29 @@ def _parse_wire_datetime(value: Any) -> datetime | None:
 
 
 def program_is_enabled(raw: dict[str, Any]) -> bool:
-    """Is the program allowed to run at all?
+    """Can the program fire at all?
 
     Mirrors the portal's own convention: a weekly program with an empty
     day mask can never fire, and that is exactly how the portal "parks" a
-    program (there is no dedicated enabled flag on the wire).
+    program (there is no dedicated enabled flag on the wire). A slot that
+    was never configured (factory record: all days, no start time, every
+    duration 0) cannot fire either, so it is not enabled.
     """
     cycle = int(raw.get("cycle", CYCLE_WEEKLY) or 0)
-    if cycle == CYCLE_WEEKLY:
-        return bool(_weekday_mask(raw))
-    return True
+    if cycle == CYCLE_WEEKLY and not _weekday_mask(raw):
+        return False
+    return _has_runnable_content(raw)
+
+
+def _has_runnable_content(raw: dict[str, Any]) -> bool:
+    """A positive budget and a window (LR-AG) or a start plus a duration."""
+    if _water_budget(raw) <= 0:
+        return False
+    if _active_windows(raw):
+        return True
+    return bool(_active_start_times(raw)) and any(
+        int(seconds or 0) > 0 for seconds in raw.get("stationsDuration") or []
+    )
 
 
 def _active_start_times(raw: dict[str, Any]) -> list[int]:
