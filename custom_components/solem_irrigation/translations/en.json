@@ -196,11 +196,11 @@
         },
         "durations": {
           "name": "Station durations",
-          "description": "Classic controllers: minutes per station, keyed by station number (e.g. {\"1\": 10}). Stations left out keep their duration."
+          "description": "Classic controllers: minutes per station, keyed by station number (station 1 to 10 minutes: 1: 10). Stations left out keep their duration."
         },
         "windows": {
           "name": "Watering windows",
-          "description": "LR-AG: up to 4 windows {start, end, soak_on_minutes, soak_off_minutes}; leave the soak fields out to water throughout."
+          "description": "LR-AG: up to 4 windows, each with start, end and optional soak_on_minutes / soak_off_minutes; leave the soak fields out to water throughout."
         },
         "push": {
           "name": "Push to the controller",

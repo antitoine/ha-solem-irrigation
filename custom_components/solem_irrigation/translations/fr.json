@@ -196,11 +196,11 @@
         },
         "durations": {
           "name": "Durées par station",
-          "description": "Programmateurs classiques : minutes par station, indexées par numéro de station (ex. {\"1\": 10}). Les stations non citées gardent leur durée."
+          "description": "Programmateurs classiques : minutes par station, indexées par numéro de station (station 1 à 10 minutes : 1: 10). Les stations non citées gardent leur durée."
         },
         "windows": {
           "name": "Plages d'arrosage",
-          "description": "LR-AG : jusqu'à 4 plages {start, end, soak_on_minutes, soak_off_minutes} ; sans les champs de cycle, l'arrosage est continu."
+          "description": "LR-AG : jusqu'à 4 plages, chacune avec start, end et en option soak_on_minutes / soak_off_minutes ; sans les champs de cycle, l'arrosage est continu."
         },
         "push": {
           "name": "Envoyer au programmateur",
