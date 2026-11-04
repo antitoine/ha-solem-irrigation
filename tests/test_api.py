@@ -11,6 +11,8 @@ from custom_components.solem_irrigation.api import (
     SolemApiClient,
     SolemAuthError,
     SolemConnectionError,
+    SolemDeviceUnreachableError,
+    SolemValidationError,
     _extract_input_labels,
     _extract_js_array,
     _extract_js_object,
@@ -639,6 +641,163 @@ async def test_send_command_builds_payload_and_headers():
         assert kwargs["data"]["moduleSerialNumber"] == "SER"
         assert kwargs["data"]["commandType"] == "manualStop"
         assert kwargs["headers"]["X-Requested-With"] == "XMLHttpRequest"
+
+
+# -- writes (stored programs) -------------------------------------------------
+
+
+async def test_update_programs_puts_the_whole_list_and_returns_the_echo():
+    """PUT /program/update carries every program; the echo is returned."""
+    programs = [{"id": "p1", "name": "Pinot", "index": 0}]
+    echo = [{"id": "p1", "name": "Pinot", "index": 0, "dataChanged": True}]
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.put(
+                f"{BASE}/program/update",
+                payload={"updatedPrograms": echo, "validationMessage": []},
+            )
+            result = await client.async_update_programs("mod1", programs, 1)
+            request = next(iter(m.requests.values()))[0]
+    assert request.kwargs["json"] == {
+        "programs": programs,
+        "module": "mod1",
+        "programmationtype": 1,
+    }
+    assert request.kwargs["headers"]["X-Requested-With"] == "XMLHttpRequest"
+    assert result == echo
+
+
+@pytest.mark.parametrize(
+    "reply", [{"validationMessage": []}, {"updatedPrograms": None}, [1, 2]]
+)
+async def test_update_programs_without_an_echo_returns_what_was_sent(reply):
+    programs = [{"id": "p1"}]
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.put(f"{BASE}/program/update", payload=reply)
+            assert await client.async_update_programs("mod1", programs, 0) == programs
+
+
+async def test_update_programs_raises_the_servers_validation_messages():
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.put(
+                f"{BASE}/program/update",
+                payload={
+                    "updatedPrograms": [],
+                    "validationMessage": ["empty_stations"],
+                },
+            )
+            with pytest.raises(SolemValidationError) as err:
+                await client.async_update_programs("mod1", [], 1)
+    assert err.value.messages == ["empty_stations"]
+    assert "empty_stations" in str(err.value)
+
+
+async def test_push_names_the_module_and_its_gateway():
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.post(
+                f"{BASE}/remote/module/configuration/and/programs", payload={"ok": 1}
+            )
+            await client.async_push_configuration_and_programs("mod1", "relay1")
+            request = next(iter(m.requests.values()))[0]
+    assert request.kwargs["json"] == {"moduleId": "mod1", "relayId": "relay1"}
+    assert request.kwargs["headers"]["X-Requested-With"] == "XMLHttpRequest"
+
+
+async def test_push_without_a_gateway_names_only_the_module():
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.post(f"{BASE}/remote/module/configuration/and/programs", body="")
+            await client.async_push_configuration_and_programs("mod1", None)
+            request = next(iter(m.requests.values()))[0]
+    assert request.kwargs["json"] == {"moduleId": "mod1"}
+
+
+@pytest.mark.parametrize("status", [503, 408])
+async def test_push_to_an_unreachable_controller(status):
+    """503 (unreachable) and 408 (downlink timeout) say the device missed it."""
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.post(f"{BASE}/remote/module/configuration/and/programs", status=status)
+            with pytest.raises(SolemDeviceUnreachableError):
+                await client.async_push_configuration_and_programs("mod1", None)
+
+
+async def test_push_failing_otherwise_is_a_plain_connection_error():
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.post(f"{BASE}/remote/module/configuration/and/programs", status=500)
+            with pytest.raises(SolemConnectionError) as err:
+                await client.async_push_configuration_and_programs("mod1", None)
+    assert not isinstance(err.value, SolemDeviceUnreachableError)
+
+
+async def test_report_sent_endpoints():
+    programs = [{"id": "p1"}]
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.post(f"{BASE}/program/reportProgramsDataSent", payload={})
+            m.post(f"{BASE}/module/reportModuleDataSent", payload={})
+            await client.async_report_programs_sent("mod1", programs)
+            await client.async_report_module_sent("mod1")
+            bodies = [
+                req.kwargs["json"] for reqs in m.requests.values() for req in reqs
+            ]
+    assert bodies == [{"programs": programs, "module": "mod1"}, {"module": "mod1"}]
+
+
+async def test_backups_list_create_delete():
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.get(
+                f"{BASE}/modules/mod1/backups",
+                payload=[{"id": "b1", "name": "HA pre-change"}, "junk"],
+            )
+            m.post(f"{BASE}/modules/mod1/backups", payload={"id": "b2"})
+            m.delete(f"{BASE}/modules/mod1/backups/b1", body="ok")
+            assert await client.async_list_backups("mod1") == [
+                {"id": "b1", "name": "HA pre-change"}
+            ]
+            assert await client.async_create_backup("mod1", "mine") == {"id": "b2"}
+            await client.async_delete_backup("mod1", "b1")
+            calls = {
+                (method, str(url)): reqs for (method, url), reqs in m.requests.items()
+            }
+    assert calls[("POST", f"{BASE}/modules/mod1/backups")][0].kwargs["json"] == {
+        "backupName": "mine"
+    }
+    assert ("DELETE", f"{BASE}/modules/mod1/backups/b1") in calls
+
+
+async def test_backups_tolerate_unexpected_replies():
+    async with aiohttp.ClientSession() as session:
+        client = _client(session)
+        client._user_id = USER_ID
+        with aioresponses() as m:
+            m.get(f"{BASE}/modules/mod1/backups", payload={"error": "x"})
+            m.post(f"{BASE}/modules/mod1/backups", payload=[])
+            assert await client.async_list_backups("mod1") == []
+            assert await client.async_create_backup("mod1", "mine") == {}
 
 
 # -- session-expiry detection -------------------------------------------------

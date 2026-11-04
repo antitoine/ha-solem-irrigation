@@ -114,7 +114,7 @@ def _async_cleanup_legacy_entities(
         if not module.raw.get("isBattery")
     }
     # Entities a Bluetooth-only controller was given before it was left out, bar
-    # its schedule sensor, which is the one entity it still has.
+    # its schedule sensor and program switches, the entities it still has.
     bluetooth = tuple(
         f"{module.id}_"
         for module in entry.runtime_data.modules.values()
@@ -126,7 +126,11 @@ def _async_cleanup_legacy_entities(
             unique_id.endswith(_LEGACY_UNIQUE_ID_SUFFIXES)
             or any(token in unique_id for token in _LEGACY_UNIQUE_ID_SUBSTRINGS)
             or unique_id in stale_battery
-            or (unique_id.startswith(bluetooth) and not unique_id.endswith("_schedule"))
+            or (
+                unique_id.startswith(bluetooth)
+                and not unique_id.endswith("_schedule")
+                and "_prog_" not in unique_id
+            )
         ):
             entity_registry.async_remove(entity.entity_id)
 

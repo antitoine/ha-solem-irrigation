@@ -53,3 +53,107 @@ run:
           max: 720
           unit_of_measurement: min
           mode: box
+
+set_program_schedule:
+  target:
+    entity:
+      integration: solem_irrigation
+      domain: switch
+  fields:
+    program:
+      required: true
+      example: Matin
+      selector:
+        text:
+    schedule_type:
+      required: false
+      selector:
+        select:
+          mode: dropdown
+          options:
+            - weekly
+            - even_days
+            - odd_days
+            - odd_days_not_31
+            - interval
+    weekdays:
+      required: false
+      example: "[mon, wed, fri]"
+      selector:
+        select:
+          multiple: true
+          options:
+            - mon
+            - tue
+            - wed
+            - thu
+            - fri
+            - sat
+            - sun
+    every_days:
+      required: false
+      example: 3
+      selector:
+        number:
+          min: 1
+          max: 31
+          mode: box
+    offset_days:
+      required: false
+      example: 0
+      selector:
+        number:
+          min: 0
+          max: 30
+          mode: box
+    water_budget:
+      required: false
+      example: 100
+      selector:
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: "%"
+          mode: box
+    enabled:
+      required: false
+      selector:
+        boolean:
+    start_times:
+      required: false
+      example: "['06:00', '20:30']"
+      selector:
+        object:
+    durations:
+      required: false
+      example: "{'1': 10, '2': 15}"
+      selector:
+        object:
+    windows:
+      required: false
+      example: "[{start: '06:00', end: '08:00'}]"
+      selector:
+        object:
+    push:
+      required: false
+      default: true
+      selector:
+        boolean:
+
+push_programs:
+  target:
+    entity:
+      integration: solem_irrigation
+      domain: switch
+
+create_backup:
+  target:
+    entity:
+      integration: solem_irrigation
+      domain: switch
+  fields:
+    name:
+      required: false
+      example: Before winter
+      selector:
+        text:

@@ -10,13 +10,19 @@ import pytest
 from custom_components.solem_irrigation import schedule
 from custom_components.solem_irrigation.schedule import (
     ScheduleError,
+    apply_schedule_changes,
+    hhmm_to_minutes,
+    is_parked,
     mask_to_weekdays,
     minutes_to_hhmm,
     next_run,
+    park_program,
     program_is_enabled,
     program_occurrences,
     program_runs_on,
     program_summary,
+    restore_program,
+    weekdays_to_mask,
 )
 
 TZ = ZoneInfo("Europe/Rome")
@@ -443,3 +449,438 @@ def test_occurrences_sort_by_instant_not_text():
     )
     instants = [datetime.fromisoformat(o["start"]) for o in runs]
     assert instants == sorted(instants)
+
+
+# -- park / restore ----------------------------------------------------------------
+
+
+def test_park_and_restore_round_trip():
+    program = classic_program(
+        cycle=schedule.CYCLE_INTERVAL, numberOfDays=3, synchroDay=1
+    )
+    parked, snapshot = park_program(program)
+    assert parked["cycle"] == schedule.CYCLE_WEEKLY
+    assert parked["weekDays"] == 0
+    assert not program_is_enabled(parked)
+    # Everything else untouched.
+    assert parked["startTimes"] == program["startTimes"]
+
+    restored = restore_program(parked, snapshot)
+    for field_name in ("cycle", "weekDays", "numberOfDays", "synchroDay"):
+        assert restored[field_name] == program[field_name]
+    assert program_is_enabled(restored)
+
+
+def test_restore_without_snapshot_falls_back_to_every_day():
+    parked, _ = park_program(classic_program())
+    restored = restore_program(parked, None)
+    assert restored["cycle"] == schedule.CYCLE_WEEKLY
+    assert restored["weekDays"] == 127
+
+
+def test_restore_with_parked_snapshot_falls_back():
+    # Snapshot captured while already parked must not restore "never runs".
+    parked, _ = park_program(classic_program(weekDays=0))
+    restored = restore_program(parked, {"cycle": 0, "weekDays": 0})
+    assert restored["weekDays"] == 127
+
+
+def test_is_parked():
+    parked, _ = park_program(classic_program())
+    assert is_parked(parked) is True
+    assert is_parked(classic_program()) is False  # weekly with days set
+    assert is_parked({"cycle": 4, "weekDays": 0}) is False  # interval runs
+    assert is_parked({"cycle": "junk", "weekDays": 0}) is False  # garbage
+
+
+# -- apply_schedule_changes ------------------------------------------------------
+
+
+def test_apply_changes_untouched_fields_are_identical():
+    program = classic_program()
+    updated = apply_schedule_changes(
+        program, {"water_budget": 80}, agricultural=False, now_utc=NOW_UTC
+    )
+    assert updated["waterBudget"] == 80
+    for key in program:
+        if key != "waterBudget":
+            assert updated[key] == program[key], key
+    # Input never mutated.
+    assert program["waterBudget"] == 100
+
+
+def test_apply_changes_weekdays():
+    updated = apply_schedule_changes(
+        classic_program(),
+        {"weekdays": ["mon", "wed", "fri"]},
+        agricultural=False,
+        now_utc=NOW_UTC,
+    )
+    assert updated["weekDays"] == 1 + 4 + 16
+
+
+def test_apply_changes_weekdays_requires_weekly_cycle():
+    program = classic_program(cycle=schedule.CYCLE_INTERVAL)
+    with pytest.raises(ScheduleError):
+        apply_schedule_changes(
+            program, {"weekdays": ["mon"]}, agricultural=False, now_utc=NOW_UTC
+        )
+
+
+def test_apply_changes_empty_weekdays_rejected():
+    with pytest.raises(ScheduleError):
+        apply_schedule_changes(
+            classic_program(), {"weekdays": []}, agricultural=False, now_utc=NOW_UTC
+        )
+
+
+def test_apply_changes_switch_to_weekly_requires_days_when_mask_empty():
+    program = classic_program(cycle=schedule.CYCLE_INTERVAL, weekDays=0)
+    with pytest.raises(ScheduleError):
+        apply_schedule_changes(
+            program,
+            {"schedule_type": "weekly"},
+            agricultural=False,
+            now_utc=NOW_UTC,
+        )
+    updated = apply_schedule_changes(
+        program,
+        {"schedule_type": "weekly", "weekdays": ["sat", "sun"]},
+        agricultural=False,
+        now_utc=NOW_UTC,
+    )
+    assert updated["cycle"] == schedule.CYCLE_WEEKLY
+    assert updated["weekDays"] == 32 + 64
+
+
+def test_apply_changes_interval():
+    updated = apply_schedule_changes(
+        classic_program(),
+        {"schedule_type": "interval", "every_days": 3, "offset_days": 1},
+        agricultural=False,
+        now_utc=NOW_UTC,
+    )
+    assert updated["cycle"] == schedule.CYCLE_INTERVAL
+    assert updated["numberOfDays"] == 3
+    assert updated["synchroDay"] == 1
+    # Anchor = now_utc + offset, serialised like the portal does.
+    assert updated["periodicStartDate"] == "2026-07-08T12:00:00.000Z"
+
+
+def test_apply_changes_interval_validation():
+    for changes in (
+        {"schedule_type": "interval", "every_days": 0},
+        {"schedule_type": "interval", "every_days": 32},
+        {"schedule_type": "interval", "every_days": 3, "offset_days": 3},
+        {"schedule_type": "interval", "every_days": 3, "offset_days": -1},
+    ):
+        with pytest.raises(ScheduleError):
+            apply_schedule_changes(
+                classic_program(), changes, agricultural=False, now_utc=NOW_UTC
+            )
+
+
+def test_apply_changes_every_days_requires_interval_cycle():
+    with pytest.raises(ScheduleError):
+        apply_schedule_changes(
+            classic_program(), {"every_days": 3}, agricultural=False, now_utc=NOW_UTC
+        )
+    # But adjusting an already-interval program works without schedule_type.
+    program = classic_program(cycle=schedule.CYCLE_INTERVAL)
+    updated = apply_schedule_changes(
+        program, {"every_days": 5}, agricultural=False, now_utc=NOW_UTC
+    )
+    assert updated["numberOfDays"] == 5
+
+
+def test_apply_changes_start_times():
+    updated = apply_schedule_changes(
+        classic_program(),
+        {"start_times": ["20:00", "06:00", "06:00"]},
+        agricultural=False,
+        now_utc=NOW_UTC,
+    )
+    assert updated["startTimes"] == [360, 1200, -1, -1, -1, -1, -1, -1]
+    with pytest.raises(ScheduleError):
+        apply_schedule_changes(
+            classic_program(),
+            {"start_times": [f"0{h}:00" for h in range(9)]},
+            agricultural=False,
+            now_utc=NOW_UTC,
+        )
+
+
+def test_apply_changes_durations():
+    updated = apply_schedule_changes(
+        classic_program(),
+        {"durations": {"1": 30, "4": 2.5}},
+        agricultural=False,
+        now_utc=NOW_UTC,
+    )
+    assert updated["stationsDuration"][0] == 1800
+    assert updated["stationsDuration"][3] == 150
+    assert len(updated["stationsDuration"]) == 12
+    for changes in (
+        {"durations": {"0": 5}},
+        {"durations": {"13": 5}},
+        {"durations": {"x": 5}},
+        {"durations": {"1": 721}},
+    ):
+        with pytest.raises(ScheduleError):
+            apply_schedule_changes(
+                classic_program(), changes, agricultural=False, now_utc=NOW_UTC
+            )
+
+
+def test_apply_changes_family_mismatch():
+    with pytest.raises(ScheduleError):
+        apply_schedule_changes(
+            classic_program(),
+            {"windows": [{"start": "06:00", "end": "08:00"}]},
+            agricultural=False,
+            now_utc=NOW_UTC,
+        )
+    for changes in (
+        {"start_times": ["06:00"]},
+        {"durations": {"1": 5}},
+    ):
+        with pytest.raises(ScheduleError):
+            apply_schedule_changes(
+                ag_program(), changes, agricultural=True, now_utc=NOW_UTC
+            )
+
+
+def test_apply_changes_windows_constant_watering():
+    updated = apply_schedule_changes(
+        ag_program(),
+        {"windows": [{"start": "06:00", "end": "08:00"}]},
+        agricultural=True,
+        now_utc=NOW_UTC,
+    )
+    assert updated["windows"][0] == {"start": 360, "end": 480, "on": 7200, "off": 0}
+    # Padded to exactly 4 windows.
+    assert len(updated["windows"]) == 4
+    assert updated["windows"][1] == {"start": -1, "end": -1, "on": 0, "off": 0}
+
+
+def test_apply_changes_windows_soak_cycle():
+    updated = apply_schedule_changes(
+        ag_program(),
+        {
+            "windows": [
+                {
+                    "start": "06:00",
+                    "end": "08:00",
+                    "soak_on_minutes": 10,
+                    "soak_off_minutes": 20,
+                }
+            ]
+        },
+        agricultural=True,
+        now_utc=NOW_UTC,
+    )
+    assert updated["windows"][0] == {"start": 360, "end": 480, "on": 600, "off": 1200}
+
+
+def test_apply_changes_windows_midnight_crossing():
+    updated = apply_schedule_changes(
+        ag_program(),
+        {"windows": [{"start": "23:00", "end": "02:00"}]},
+        agricultural=True,
+        now_utc=NOW_UTC,
+    )
+    # 3 h across midnight, constant watering.
+    assert updated["windows"][0] == {"start": 1380, "end": 120, "on": 10800, "off": 0}
+
+
+def test_apply_changes_window_ending_where_it_starts_is_refused():
+    """Not a 24 h window: an end equal to the start is a typo."""
+    with pytest.raises(ScheduleError, match="must end after it starts"):
+        apply_schedule_changes(
+            ag_program(),
+            {"windows": [{"start": "06:00", "end": "06:00"}]},
+            agricultural=True,
+            now_utc=NOW_UTC,
+        )
+
+
+def test_apply_changes_windows_validation():
+    with pytest.raises(ScheduleError):  # too many
+        apply_schedule_changes(
+            ag_program(),
+            {"windows": [{"start": "06:00", "end": "07:00"}] * 5},
+            agricultural=True,
+            now_utc=NOW_UTC,
+        )
+    with pytest.raises(ScheduleError):  # soak longer than window
+        apply_schedule_changes(
+            ag_program(),
+            {
+                "windows": [
+                    {
+                        "start": "06:00",
+                        "end": "06:30",
+                        "soak_on_minutes": 20,
+                        "soak_off_minutes": 20,
+                    }
+                ]
+            },
+            agricultural=True,
+            now_utc=NOW_UTC,
+        )
+
+
+def test_apply_changes_windows_sorted():
+    updated = apply_schedule_changes(
+        ag_program(),
+        {
+            "windows": [
+                {"start": "18:00", "end": "19:00"},
+                {"start": "06:00", "end": "07:00"},
+            ]
+        },
+        agricultural=True,
+        now_utc=NOW_UTC,
+    )
+    assert updated["windows"][0]["start"] == 360
+    assert updated["windows"][1]["start"] == 1080
+
+
+def test_apply_changes_unknown_schedule_type():
+    with pytest.raises(ScheduleError):
+        apply_schedule_changes(
+            classic_program(),
+            {"schedule_type": "fortnightly"},
+            agricultural=False,
+            now_utc=NOW_UTC,
+        )
+
+
+def test_apply_changes_water_budget_range():
+    with pytest.raises(ScheduleError):
+        apply_schedule_changes(
+            classic_program(),
+            {"water_budget": 500},
+            agricultural=False,
+            now_utc=NOW_UTC,
+        )
+
+
+# -- write-side additions ----------------------------------------------------------
+
+
+def test_weekdays_to_mask():
+    assert weekdays_to_mask(["mon", "SUN"]) == 1 + 64
+    assert weekdays_to_mask([]) == 0
+    with pytest.raises(ScheduleError):
+        weekdays_to_mask(["funday"])
+
+
+@pytest.mark.parametrize("text", ["06:00", "6:00", "06:00:00", " 23:59 "])
+def test_hhmm_to_minutes_accepts(text):
+    assert hhmm_to_minutes(text) in (360, 1439)
+
+
+@pytest.mark.parametrize("text", ["24:00", "06:60", "6", "x:y", "", None])
+def test_hhmm_to_minutes_rejects(text):
+    with pytest.raises(ScheduleError):
+        hhmm_to_minutes(text)
+
+
+def test_is_parked_is_the_portals_convention_not_merely_disabled():
+    """A program with no start time cannot run, but it is not parked."""
+    idle = classic_program(startTimes=[-1] * 8)
+    assert program_is_enabled(idle) is False
+    assert is_parked(idle) is False
+    assert is_parked(classic_program(weekDays=128)) is True  # only a noise bit
+    assert is_parked({"weekDays": 0}) is True  # cycle defaults to weekly
+    assert is_parked({"cycle": 0, "weekDays": "x"}) is False
+
+
+def test_park_and_restore_leave_every_other_field_identical():
+    program = classic_program(unknownField={"nested": [1, 2]}, dataChanged=True)
+    parked, snapshot = park_program(program)
+    restored = restore_program(parked, snapshot)
+    assert restored == program
+    assert program["weekDays"] == 127  # the input is never mutated
+
+
+def test_restore_keeps_a_field_the_snapshot_lacks():
+    parked, _ = park_program(classic_program(cycle=schedule.CYCLE_INTERVAL))
+    restored = restore_program(
+        parked, {"cycle": schedule.CYCLE_INTERVAL, "periodicStartDate": None}
+    )
+    assert restored["cycle"] == schedule.CYCLE_INTERVAL
+    assert restored["periodicStartDate"] == parked["periodicStartDate"]
+
+
+def test_apply_changes_durations_leave_the_other_slots_as_they_were():
+    """Only the named stations change: the wire's own values round-trip."""
+    program = classic_program(stationsDuration=[7200, None, 30])
+    updated = apply_schedule_changes(
+        program, {"durations": {"2": 1}}, agricultural=False, now_utc=NOW_UTC
+    )
+    assert updated["stationsDuration"] == [7200, 60, 30]
+    updated = apply_schedule_changes(
+        program, {"durations": {"5": 1}}, agricultural=False, now_utc=NOW_UTC
+    )
+    assert updated["stationsDuration"] == [7200, None, 30, 0, 60]
+
+
+def test_apply_changes_interval_anchor_is_utc_whatever_now_zone():
+    updated = apply_schedule_changes(
+        classic_program(),
+        {"schedule_type": "interval", "every_days": 2},
+        agricultural=False,
+        now_utc=NOW_UTC.astimezone(TZ),
+    )
+    assert updated["periodicStartDate"] == "2026-07-07T12:00:00.000Z"
+    assert updated["synchroDay"] == 0
+
+
+def test_apply_changes_switch_to_an_even_days_cycle_keeps_the_day_mask():
+    updated = apply_schedule_changes(
+        classic_program(),
+        {"schedule_type": "even_days"},
+        agricultural=False,
+        now_utc=NOW_UTC,
+    )
+    assert updated["cycle"] == schedule.CYCLE_EVEN_DAYS
+    assert updated["weekDays"] == 127
+
+
+def test_apply_changes_window_without_bounds_is_refused():
+    with pytest.raises(ScheduleError):
+        apply_schedule_changes(
+            ag_program(),
+            {"windows": [{"start": "06:00"}]},
+            agricultural=True,
+            now_utc=NOW_UTC,
+        )
+    with pytest.raises(ScheduleError):  # soaking needs a watering phase
+        apply_schedule_changes(
+            ag_program(),
+            {"windows": [{"start": "06:00", "end": "07:00", "soak_off_minutes": 5}]},
+            agricultural=True,
+            now_utc=NOW_UTC,
+        )
+
+
+def test_apply_changes_an_edited_program_still_decodes():
+    """What the write side produces, the read side reads back."""
+    updated = apply_schedule_changes(
+        classic_program(),
+        {
+            "schedule_type": "weekly",
+            "weekdays": ["tue"],
+            "start_times": ["05:30"],
+            "durations": {"1": 15},
+        },
+        agricultural=False,
+        now_utc=NOW_UTC,
+    )
+    summary = program_summary(updated, agricultural=False)
+    assert summary["days"] == ["tue"]
+    assert summary["start_times"] == ["05:30"]
+    assert summary["durations"] == {"1": 15.0}
+    assert summary["enabled"] is True

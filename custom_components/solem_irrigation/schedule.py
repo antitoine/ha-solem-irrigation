@@ -17,10 +17,12 @@ The MySOLEM wire format (reverse-engineered from the web app) stores one
   crosses midnight. Programs pair 1:1 with stations (program.index 0-based ==
   station.index - 1).
 * There is no per-program enabled flag: the portal "parks" a program by
-  setting ``cycle=0, weekDays=0``, which :func:`program_is_enabled` recognises.
+  setting ``cycle=0, weekDays=0``, which :func:`program_is_enabled` recognises
+  and :func:`park_program` / :func:`restore_program` reproduce.
 
-This module only reads programs: it decodes them into summaries and
-expands them into concrete runs. All datetime math takes explicit
+This module decodes programs into summaries and expands them into concrete
+runs, and applies schedule edits to a program record
+(:func:`apply_schedule_changes`). All datetime math takes explicit
 ``now``/timezone inputs so it is testable and DST-safe.
 """
 
@@ -51,14 +53,38 @@ _CYCLE_TO_TYPE = {
     CYCLE_ODD_DAYS_NOT_31: SCHEDULE_TYPE_ODD_DAYS_NOT_31,
     CYCLE_INTERVAL: SCHEDULE_TYPE_INTERVAL,
 }
+_TYPE_TO_CYCLE = {v: k for k, v in _CYCLE_TO_TYPE.items()}
 
 MINUTES_PER_DAY = 24 * 60
 _LAST_MONTH_DAY = 31
 _WEEKDAY_MASK = 0x7F  # seven day bits; anything above is noise
+_MAX_HOUR = 23
+_MAX_MINUTE = 59
+
+# What the wire, or the web app's own inputs, accept when a program is written.
+MAX_START_TIMES = 8
+MAX_STATION_SLOTS = 12
+MAX_WINDOWS = 4
+MAX_STATION_MINUTES = 12 * 60
+MAX_WATER_BUDGET = 300
+MAX_INTERVAL_DAYS = 31
+MAX_OFFSET_DAYS = 30
+
+_EMPTY_WINDOW = {"start": -1, "end": -1, "on": 0, "off": 0}
+
+# The fields that make up a program's recurrence: saved when a program is
+# parked, so that turning it back on restores the exact schedule.
+_RECURRENCE_FIELDS = (
+    "cycle",
+    "weekDays",
+    "numberOfDays",
+    "synchroDay",
+    "periodicStartDate",
+)
 
 
 class ScheduleError(ValueError):
-    """A schedule computation was given input it cannot work with."""
+    """A schedule computation or edit was given input it cannot work with."""
 
 
 # -- conversions ------------------------------------------------------------
@@ -68,6 +94,17 @@ def mask_to_weekdays(mask: int) -> list[str]:
     """Convert the wire bitmask to weekday keys (``mon`` … ``sun``)."""
     mask = max(0, mask) & _WEEKDAY_MASK
     return [key for bit, key in enumerate(WEEKDAY_KEYS) if mask >> bit & 1]
+
+
+def weekdays_to_mask(days: list[str]) -> int:
+    """Convert weekday keys (``mon`` … ``sun``) to the wire bitmask."""
+    mask = 0
+    for day in days:
+        try:
+            mask |= 1 << WEEKDAY_KEYS.index(str(day).casefold())
+        except ValueError:
+            raise ScheduleError(f"Unknown weekday '{day}'") from None
+    return mask
 
 
 def _weekday_mask(raw: dict[str, Any]) -> int:
@@ -85,6 +122,18 @@ def minutes_to_hhmm(minutes: int) -> str:
     """Render minutes since midnight as ``HH:MM`` (wraps past midnight)."""
     minutes = int(minutes) % MINUTES_PER_DAY
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def hhmm_to_minutes(text: Any) -> int:
+    """Parse ``HH:MM`` (or ``HH:MM:SS``) into minutes since midnight."""
+    parts = str(text).strip().split(":")
+    try:
+        hours, mins = int(parts[0]), int(parts[1])
+    except IndexError, ValueError:
+        raise ScheduleError(f"Invalid time '{text}', expected HH:MM") from None
+    if not (0 <= hours <= _MAX_HOUR and 0 <= mins <= _MAX_MINUTE):
+        raise ScheduleError(f"Invalid time '{text}', expected HH:MM")
+    return hours * 60 + mins
 
 
 def _parse_wire_datetime(value: Any) -> datetime | None:
@@ -368,3 +417,241 @@ def program_summary(raw: dict[str, Any], *, agricultural: bool) -> dict[str, Any
             if int(seconds or 0) > 0
         }
     return summary
+
+
+# -- park / restore (the per-program switch) -----------------------------------
+
+
+def is_parked(raw: dict[str, Any]) -> bool:
+    """Is the program parked the way the portal disables one (weekly, no day)?
+
+    Narrower than "not enabled": a program with no start time is not enabled
+    either, but it is not parked, and there is no recurrence to restore.
+    Unreadable fields read as not parked, so a restore never overwrites data
+    that is not understood.
+    """
+    try:
+        cycle = int(raw.get("cycle", CYCLE_WEEKLY) or 0)
+        return cycle == CYCLE_WEEKLY and _weekday_mask(raw) == 0
+    except TypeError, ValueError:
+        return False
+
+
+def park_program(raw: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Disable a program as the portal does; return ``(parked, snapshot)``.
+
+    The snapshot holds the whole recurrence, so :func:`restore_program` can
+    bring the exact schedule back. Every other field is left as it is.
+    """
+    snapshot = {name: raw.get(name) for name in _RECURRENCE_FIELDS}
+    parked = dict(raw)
+    parked["cycle"] = CYCLE_WEEKLY
+    parked["weekDays"] = 0
+    return parked, snapshot
+
+
+def restore_program(
+    raw: dict[str, Any], snapshot: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Re-enable a parked program from its snapshot, else for every day.
+
+    A snapshot that is itself parked (or missing) cannot bring a schedule back,
+    so the program then runs every day of the week.
+    """
+    restored = dict(raw)
+    if snapshot and not is_parked(snapshot):
+        for name in _RECURRENCE_FIELDS:
+            if snapshot.get(name) is not None:
+                restored[name] = snapshot[name]
+    else:
+        restored["cycle"] = CYCLE_WEEKLY
+        restored["weekDays"] = _WEEKDAY_MASK
+    return restored
+
+
+# -- schedule editing ------------------------------------------------------------
+
+
+def apply_schedule_changes(
+    raw: dict[str, Any],
+    changes: dict[str, Any],
+    *,
+    agricultural: bool,
+    now_utc: datetime,
+) -> dict[str, Any]:
+    """Return a copy of ``raw`` with the requested schedule fields replaced.
+
+    ``changes`` uses the service vocabulary: ``schedule_type``, ``weekdays``,
+    ``every_days`` / ``offset_days``, ``water_budget``, and ``start_times`` plus
+    ``durations`` for a classic controller or ``windows`` for an LR-AG. A field
+    not named in ``changes`` is left exactly as it was: the wire replaces whole
+    programs, so whatever is not edited must round-trip unchanged. Raises
+    :class:`ScheduleError` on a value the controller would not take.
+    """
+    updated = dict(raw)
+    _apply_recurrence_changes(updated, changes, now_utc)
+
+    if "water_budget" in changes:
+        budget = int(changes["water_budget"])
+        if not 0 <= budget <= MAX_WATER_BUDGET:
+            raise ScheduleError(f"water_budget must be 0-{MAX_WATER_BUDGET} %")
+        updated["waterBudget"] = budget
+
+    if "start_times" in changes:
+        if agricultural:
+            raise ScheduleError(
+                "'start_times' is for classic controllers; use 'windows'"
+            )
+        updated["startTimes"] = _build_start_times(changes["start_times"])
+
+    if "durations" in changes:
+        if agricultural:
+            raise ScheduleError("'durations' is for classic controllers; use 'windows'")
+        updated["stationsDuration"] = _build_durations(
+            changes["durations"], updated.get("stationsDuration") or []
+        )
+
+    if "windows" in changes:
+        if not agricultural:
+            raise ScheduleError("'windows' is for agricultural controllers (LR-AG)")
+        updated["windows"] = _build_windows(changes["windows"])
+
+    return updated
+
+
+def _apply_recurrence_changes(
+    updated: dict[str, Any], changes: dict[str, Any], now_utc: datetime
+) -> None:
+    """Apply ``schedule_type``, ``weekdays`` and the interval fields."""
+    schedule_type = changes.get("schedule_type")
+    if schedule_type is not None:
+        if schedule_type not in _TYPE_TO_CYCLE:
+            raise ScheduleError(f"Unknown schedule_type '{schedule_type}'")
+        cycle = _TYPE_TO_CYCLE[schedule_type]
+        updated["cycle"] = cycle
+        if cycle == CYCLE_INTERVAL:
+            _apply_interval(
+                updated,
+                changes.get("every_days", updated.get("numberOfDays") or 1),
+                changes.get("offset_days", 0),
+                now_utc,
+            )
+        elif (
+            cycle == CYCLE_WEEKLY
+            and "weekdays" not in changes
+            and not _weekday_mask(updated)
+        ):
+            # Weekly needs days: without them the program would end up parked.
+            raise ScheduleError("schedule_type 'weekly' requires 'weekdays'")
+    elif "every_days" in changes or "offset_days" in changes:
+        if int(updated.get("cycle", CYCLE_WEEKLY) or 0) != CYCLE_INTERVAL:
+            raise ScheduleError(
+                "'every_days'/'offset_days' need schedule_type 'interval'"
+            )
+        _apply_interval(
+            updated,
+            changes.get("every_days", updated.get("numberOfDays") or 1),
+            changes.get("offset_days", updated.get("synchroDay") or 0),
+            now_utc,
+        )
+
+    if "weekdays" in changes:
+        if int(updated.get("cycle", CYCLE_WEEKLY) or 0) != CYCLE_WEEKLY:
+            raise ScheduleError("'weekdays' only applies to schedule_type 'weekly'")
+        if not (mask := weekdays_to_mask(list(changes["weekdays"]))):
+            raise ScheduleError(
+                "'weekdays' must name at least one day (turn the program's "
+                "switch off to disable it)"
+            )
+        updated["weekDays"] = mask
+
+
+def _apply_interval(
+    updated: dict[str, Any], every: Any, offset: Any, now_utc: datetime
+) -> None:
+    """Set an every-N-days recurrence, anchored as the portal anchors it."""
+    every = int(every)
+    offset = int(offset)
+    if not 1 <= every <= MAX_INTERVAL_DAYS:
+        raise ScheduleError(f"every_days must be 1-{MAX_INTERVAL_DAYS}")
+    if not 0 <= offset <= MAX_OFFSET_DAYS or offset >= every:
+        raise ScheduleError(
+            f"offset_days must be 0-{MAX_OFFSET_DAYS} and smaller than every_days"
+        )
+    updated["numberOfDays"] = every
+    updated["synchroDay"] = offset
+    anchor = now_utc.astimezone(UTC) + timedelta(days=offset)
+    updated["periodicStartDate"] = anchor.isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _build_start_times(times: list[Any]) -> list[int]:
+    """The wire's eight start-time slots, sorted, -1 for an unused one."""
+    if len(times) > MAX_START_TIMES:
+        raise ScheduleError(f"At most {MAX_START_TIMES} start times are supported")
+    minutes = sorted({hhmm_to_minutes(t) for t in times})
+    return minutes + [-1] * (MAX_START_TIMES - len(minutes))
+
+
+def _build_durations(durations: dict[Any, Any], current: list[Any]) -> list[Any]:
+    """``current`` with the named stations' minutes replaced, in seconds.
+
+    The slots that are not named keep their value as is.
+    """
+    result = list(current)
+    for key, minutes in durations.items():
+        try:
+            slot = int(key)
+            seconds = round(float(minutes) * 60)
+        except TypeError, ValueError:
+            raise ScheduleError(f"Invalid duration for station '{key}'") from None
+        if not 1 <= slot <= MAX_STATION_SLOTS:
+            raise ScheduleError(
+                f"Station index {slot} out of range 1-{MAX_STATION_SLOTS}"
+            )
+        if not 0 <= seconds <= MAX_STATION_MINUTES * 60:
+            raise ScheduleError(
+                f"Station duration must be 0-{MAX_STATION_MINUTES} minutes"
+            )
+        result += [0] * (slot - len(result))
+        result[slot - 1] = seconds
+    return result
+
+
+def _build_windows(windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """An LR-AG's four watering windows, sorted, padded with unused slots."""
+    if len(windows) > MAX_WINDOWS:
+        raise ScheduleError(f"At most {MAX_WINDOWS} windows are supported")
+    built: list[dict[str, Any]] = []
+    for window in windows:
+        try:
+            start = hhmm_to_minutes(window["start"])
+            end = hhmm_to_minutes(window["end"])
+        except KeyError, TypeError:
+            raise ScheduleError("Each window needs a 'start' and an 'end'") from None
+        if end == start:
+            raise ScheduleError("a window must end after it starts (or cross midnight)")
+        duration = end - start
+        if duration < 0:  # crosses midnight
+            duration += MINUTES_PER_DAY
+        soak_on = window.get("soak_on_minutes")
+        soak_off = window.get("soak_off_minutes")
+        if soak_on or soak_off:
+            on_s = round(float(soak_on or 0) * 60)
+            off_s = round(float(soak_off or 0) * 60)
+            if on_s <= 0 or off_s < 0:
+                raise ScheduleError("soak_on_minutes must be > 0 when soaking")
+            if on_s + off_s > duration * 60:
+                raise ScheduleError(
+                    "Soak cycle (on + off) cannot exceed the window duration"
+                )
+        else:
+            # Constant watering: the portal stores it as one cycle filling the
+            # whole window.
+            on_s = duration * 60
+            off_s = 0
+        built.append({"start": start, "end": end, "on": on_s, "off": off_s})
+    built.sort(key=lambda w: w["start"])
+    built += [dict(_EMPTY_WINDOW) for _ in range(MAX_WINDOWS - len(built))]
+    return built
