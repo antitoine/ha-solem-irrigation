@@ -14,7 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   days, even/odd or every-N-days cycles, start times and per-station durations,
   or an LR-AG's watering windows) plus the runs due today and tomorrow. Edits
   made in MySOLEM show up on the next poll. Bluetooth-only controllers get it
-  too, read from MySOLEM's copy of their programs. Read-only for now.
+  too, read from MySOLEM's copy of their programs.
+  ([#3](https://github.com/antitoine/ha-solem-irrigation/issues/3))
+- **Program editing.** A new `solem_irrigation.set_program_schedule` action
+  edits a stored program: its days (weekly, even/odd days, or every N days),
+  start times and per-station durations, an LR-AG's watering windows, its
+  water budget, and whether it is on. Each program also gets a *&lt;program&gt;
+  schedule* switch that turns it off the way MySOLEM does and back on with the
+  schedule it had. Every edit re-reads the programs first, so one made in
+  MySOLEM is never overwritten, backs them up in MySOLEM (keeping the newest
+  10 such backups), changes only the fields given, and is pushed to the
+  controller 90 seconds after the last edit, so a burst of edits costs one of
+  the pushes SOLEM rate-limits. `solem_irrigation.push_programs` pushes now,
+  and `solem_irrigation.create_backup` saves a named backup. A Bluetooth-only
+  controller gets the edit in MySOLEM only.
   ([#3](https://github.com/antitoine/ha-solem-irrigation/issues/3))
 
 ## [0.11.0] - 2026-11-02

@@ -62,6 +62,9 @@
     "switch": {
       "enabled": {
         "name": "Arrosage activé"
+      },
+      "prog_enabled": {
+        "name": "Programme {program}"
       }
     },
     "select": {
@@ -152,6 +155,70 @@
         "duration": {
           "name": "Durée",
           "description": "Durée d'arrosage en minutes pour une station. Par défaut, la dernière valeur utilisée ; une valeur explicite est mémorisée pour la prochaine fois."
+        }
+      }
+    },
+    "set_program_schedule": {
+      "name": "Modifier un programme",
+      "description": "Modifie un programme enregistré : sa récurrence (jours de la semaine, jours pairs ou impairs, ou tous les N jours), ses heures de départ et durées par station (programmateurs classiques) ou ses plages d'arrosage (LR-AG), son budget d'eau, et s'il est actif. Les programmes sont d'abord sauvegardés dans MySOLEM, enregistrés, puis envoyés au programmateur.",
+      "fields": {
+        "program": {
+          "name": "Programme",
+          "description": "Programme à modifier (nom, index ou identifiant)."
+        },
+        "schedule_type": {
+          "name": "Type de récurrence",
+          "description": "Récurrence : hebdomadaire, jours pairs, jours impairs, jours impairs sauf le 31, ou tous les N jours (intervalle)."
+        },
+        "weekdays": {
+          "name": "Jours de la semaine",
+          "description": "Jours où le programme s'exécute (récurrence hebdomadaire uniquement)."
+        },
+        "every_days": {
+          "name": "Tous les N jours",
+          "description": "Nombre de jours entre deux arrosages (intervalle uniquement, 1 à 31)."
+        },
+        "offset_days": {
+          "name": "Débute dans",
+          "description": "Jours d'ici au premier arrosage (intervalle uniquement ; inférieur à l'intervalle)."
+        },
+        "water_budget": {
+          "name": "Budget d'eau",
+          "description": "Ajuste toutes les durées (100 % les applique telles que programmées)."
+        },
+        "enabled": {
+          "name": "Actif",
+          "description": "Active le programme, ou le désactive (il reste enregistré mais ne s'exécute plus)."
+        },
+        "start_times": {
+          "name": "Heures de départ",
+          "description": "Programmateurs classiques : jusqu'à 8 heures HH:MM ; les stations arrosent l'une après l'autre à partir de chacune."
+        },
+        "durations": {
+          "name": "Durées par station",
+          "description": "Programmateurs classiques : minutes par station, indexées par numéro de station (ex. {\"1\": 10}). Les stations non citées gardent leur durée."
+        },
+        "windows": {
+          "name": "Plages d'arrosage",
+          "description": "LR-AG : jusqu'à 4 plages {start, end, soak_on_minutes, soak_off_minutes} ; sans les champs de cycle, l'arrosage est continu."
+        },
+        "push": {
+          "name": "Envoyer au programmateur",
+          "description": "Envoie la modification au programmateur (après un court délai qui regroupe plusieurs modifications). Désactivé, elle est seulement enregistrée dans MySOLEM ; envoyez-la plus tard avec l'action d'envoi des programmes."
+        }
+      }
+    },
+    "push_programs": {
+      "name": "Envoyer les programmes",
+      "description": "Envoie dès maintenant au programmateur les programmes enregistrés dans MySOLEM."
+    },
+    "create_backup": {
+      "name": "Sauvegarder les programmes",
+      "description": "Enregistre dans MySOLEM une sauvegarde nommée des programmes du programmateur, restaurable depuis l'application MySOLEM.",
+      "fields": {
+        "name": {
+          "name": "Nom",
+          "description": "Nom de la sauvegarde (un horodatage si omis)."
         }
       }
     }

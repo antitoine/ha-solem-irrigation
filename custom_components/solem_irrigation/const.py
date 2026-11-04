@@ -82,10 +82,41 @@ MODE_PROGRAM = "program"
 MODE_STATION = "station"
 RUN_MODES = [MODE_STOP, MODE_PROGRAM, MODE_STATION]
 
+# Program editing: change a stored program, push the programs to the
+# controller, back them up in the cloud.
+SERVICE_SET_PROGRAM_SCHEDULE = "set_program_schedule"
+SERVICE_PUSH_PROGRAMS = "push_programs"
+SERVICE_CREATE_BACKUP = "create_backup"
+ATTR_SCHEDULE_TYPE = "schedule_type"
+ATTR_WEEKDAYS = "weekdays"
+ATTR_EVERY_DAYS = "every_days"
+ATTR_OFFSET_DAYS = "offset_days"
+ATTR_WATER_BUDGET = "water_budget"
+ATTR_START_TIMES = "start_times"
+ATTR_DURATIONS = "durations"
+ATTR_WINDOWS = "windows"
+ATTR_PUSH = "push"
+ATTR_NAME = "name"
+
+# A program edit is saved in the cloud at once, but reaches the controller only
+# with a push, which SOLEM rate-limits (an LR-AG carries a quota of 30 a day).
+# Edits made within this many seconds of each other share a single push.
+PUSH_DEBOUNCE_SECONDS = 90.0
+# Warn once a module has been pushed more than this many times in a day.
+PUSH_WARN_PER_DAY = 10
+# Every edit first backs the programs up in the cloud, under this prefix; only
+# the newest few of those are kept. A backup with any other name is never
+# touched.
+BACKUP_PREFIX = "HA pre-change"
+MAX_HA_BACKUPS = 10
+
 # Storage key for the remembered manual-run duration (replaces the old
 # "Run duration" number entity, which persisted via RestoreNumber).
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.run_minutes"
+# Storage key for the schedule a program had before its switch turned it off,
+# so turning it back on restores it.
+SNAPSHOT_STORAGE_KEY = f"{DOMAIN}.schedule_snapshots"
 
 # Sensor inputs ---------------------------------------------------------------
 # A module's sensors are "inputs". SOLEM's own web app identifies a flow meter

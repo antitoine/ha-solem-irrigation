@@ -44,15 +44,25 @@ maintainable.
   re-added from midnight's ticks on every poll, never dropping within a day)
   and weather probe (thermometer, anemometer, air-moisture: its newest
   already-scaled windowed tick). Bluetooth-only modules are never state-polled
-  and get only a schedule sensor: the cloud cannot reach them. A module page is
-  re-read when its `programmingUpdatedAt` moves.
+  and get only a schedule sensor and program switches: the cloud cannot reach
+  them. A module page is
+  re-read when its `programmingUpdatedAt` moves. Program edits go through
+  `_write_programs`: under `_write_lock` (which the poll's projection and
+  re-read also hold) it re-reads the page, rebuilds the WHOLE program list
+  with only the target changed, backs it up in the cloud, saves it, adopts the
+  echo, then arms a debounced push (skipped for Bluetooth-only modules). The
+  recurrence a parked program had is persisted in `schedule_snapshots`
+  (saved under the lock, and dropped once a re-read shows the program is no
+  longer parked).
 - **`__init__.py`** — entry setup / unload, legacy-entity cleanup, and the
   device pre-registration that also links each controller to its LoRa gateway.
   The link uses `via_device_id`, which needs a device-registry id, so it cannot
   live in an entity's `device_info`. Also the removal hook that lets a user
   delete a device the integration no longer exposes.
-- **`schedule.py`** — pure program decoder (no Home Assistant imports): turns a
-  program record into a summary and its upcoming runs. The one exception to
+- **`schedule.py`** — pure program logic (no Home Assistant imports): turns a
+  program record into a summary and its upcoming runs, and applies an edit to
+  one (`apply_schedule_changes`, `park_program` / `restore_program`), leaving
+  every field it does not change exactly as it was. The one exception to
   "`api.py` is the only place that knows the wire format", for the program
   record.
 - **`entity.py`** — base `CoordinatorEntity` sharing `device_info` across
@@ -62,7 +72,11 @@ maintainable.
     waters one station at a time; an LR-AG, which can water several, is the
     exception).
   - `switch.py` — the *Irrigation enabled* switch (live ON/OFF, assumed-state
-    fallback); also registers the `run` and `set_enabled` services.
+    fallback), which also registers the `run`, `set_enabled`,
+    `set_program_schedule`, `push_programs` and `create_backup` services; and
+    one *&lt;program&gt; schedule* switch per stored program (parks /
+    restores it). The program switches carry a device class so that a
+    device-targeted service skips them.
   - `select.py` — *Run program* (momentary; resets to a neutral option).
   - `number.py` — per-station *Run duration* and *Rain delay* (live days
     left, assumed-state fallback).
