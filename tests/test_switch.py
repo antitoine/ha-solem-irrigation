@@ -349,7 +349,7 @@ async def test_set_program_schedule_routes_the_changes(hass, coordinator, module
     coordinator.async_command_set_program_enabled.assert_not_awaited()
 
 
-async def test_set_program_schedule_with_enabled_pushes_once(hass, coordinator, module):
+async def test_set_program_schedule_with_enabled_writes_once(hass, coordinator, module):
     coordinator.async_command_update_program = AsyncMock()
     coordinator.async_command_set_program_enabled = AsyncMock()
     switch = _switch(coordinator, module, hass)
@@ -358,13 +358,10 @@ async def test_set_program_schedule_with_enabled_pushes_once(hass, coordinator, 
         program="Matin", water_budget=80, enabled=True, push=True
     )
 
-    # The edit holds its push; the enable that follows arms the one push.
     coordinator.async_command_update_program.assert_awaited_once_with(
-        module, "Matin", {"water_budget": 80}, push=False
+        module, "Matin", {"water_budget": 80}, enabled=True, push=True
     )
-    coordinator.async_command_set_program_enabled.assert_awaited_once_with(
-        module, "Matin", True, push=True
-    )
+    coordinator.async_command_set_program_enabled.assert_not_awaited()
 
 
 async def test_set_program_schedule_enabled_alone(hass, coordinator, module):

@@ -296,11 +296,7 @@ class SolemEnableSwitch(SolemModuleEntity, SwitchEntity, RestoreEntity):
         await coordinator.async_command_run_station(module, resolved, minutes)
 
     async def async_set_program_schedule(self, **kwargs: Any) -> None:
-        """Handle the ``solem_irrigation.set_program_schedule`` service.
-
-        With both schedule fields and ``enabled``, the edit holds its push so
-        the two writes share one.
-        """
+        """Handle the ``solem_irrigation.set_program_schedule`` service."""
         program: str = kwargs.pop(ATTR_PROGRAM)
         push: bool = kwargs.pop(ATTR_PUSH, True)
         enabled: bool | None = kwargs.pop(ATTR_ENABLED, None)
@@ -310,11 +306,15 @@ class SolemEnableSwitch(SolemModuleEntity, SwitchEntity, RestoreEntity):
                 "Nothing to change: give schedule fields and/or 'enabled'."
             )
         with _service_errors():
-            if changes:
+            if changes and enabled is not None:
                 await self.coordinator.async_command_update_program(
-                    self._module, program, changes, push=push and enabled is None
+                    self._module, program, changes, enabled=enabled, push=push
                 )
-            if enabled is not None:
+            elif changes:
+                await self.coordinator.async_command_update_program(
+                    self._module, program, changes, push=push
+                )
+            elif enabled is not None:
                 await self.coordinator.async_command_set_program_enabled(
                     self._module, program, enabled, push=push
                 )

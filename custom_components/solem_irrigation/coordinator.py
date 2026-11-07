@@ -1705,6 +1705,8 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                     _LOGGER.debug(
                         "Programs of %s unchanged; nothing to save", module.id
                     )
+                    if on_saved is not None:
+                        await on_saved()
                     if module.id in self.pending_local_push:
                         # An earlier write held its push for this one.
                         self._arm_push(module, push)
@@ -1771,11 +1773,14 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         program_token: str,
         changes: dict[str, Any],
         *,
+        enabled: bool | None = None,
         push: bool = True,
     ) -> None:
-        """Apply schedule ``changes`` (the service's vocabulary) to one program."""
+        """Apply schedule ``changes`` (and optional ``enabled``) to one program."""
+        snapshot_update: tuple[str, dict[str, Any] | None] | None = None
 
         def _mutate(programs: list[dict[str, Any]]) -> None:
+            nonlocal snapshot_update
             index = _find_program_raw(module, programs, program_token)
             if module.stations:
                 for key in changes.get("durations") or {}:
@@ -1787,14 +1792,50 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                         raise schedule.ScheduleError(
                             f"Station {slot} does not exist on {module.name}"
                         )
-            programs[index] = schedule.apply_schedule_changes(
-                programs[index],
-                changes,
-                agricultural=module.is_agricultural,
-                now_utc=dt_util.utcnow(),
-            )
+            target = programs[index]
+            program_id = str(target.get("id"))
+            if changes:
+                target = schedule.apply_schedule_changes(
+                    target,
+                    changes,
+                    agricultural=module.is_agricultural,
+                    now_utc=dt_util.utcnow(),
+                )
+            if enabled is not None:
+                if enabled:
+                    if schedule.is_parked(target):
+                        target = schedule.restore_program(
+                            target, self.schedule_snapshots.get(program_id)
+                        )
+                    if not schedule.program_is_enabled(target):
+                        name = target.get("name") or program_token
+                        raise schedule.ScheduleError(
+                            f"Program {name} has nothing to run: give it a "
+                            "start time and a station duration (or a watering "
+                            "window) and a water budget above 0 first"
+                        )
+                    snapshot_update = (program_id, None)
+                elif not schedule.is_parked(target):
+                    # Parking an already parked program would save "never" as the
+                    # schedule to come back to.
+                    target, snapshot = schedule.park_program(target)
+                    snapshot_update = (program_id, snapshot)
+            elif not schedule.is_parked(target):
+                snapshot_update = (program_id, None)
+            programs[index] = target
 
-        await self._write_programs(module, _mutate, push=push)
+        async def _on_saved() -> None:
+            if snapshot_update is None:
+                return
+            program_id, snapshot = snapshot_update
+            if snapshot is None:
+                if self.schedule_snapshots.pop(program_id, None) is None:
+                    return
+            else:
+                self.schedule_snapshots[program_id] = snapshot
+            await self._snapshot_store.async_save(self.schedule_snapshots)
+
+        await self._write_programs(module, _mutate, push=push, on_saved=_on_saved)
 
     async def async_command_set_program_enabled(
         self,
@@ -1812,44 +1853,9 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         is only updated once the cloud took the write, before the next one can
         read it.
         """
-        snapshot_update: tuple[str, dict[str, Any] | None] | None = None
-
-        def _mutate(programs: list[dict[str, Any]]) -> None:
-            nonlocal snapshot_update
-            index = _find_program_raw(module, programs, program_token)
-            target = programs[index]
-            program_id = str(target.get("id"))
-            if enabled:
-                if schedule.is_parked(target):
-                    target = schedule.restore_program(
-                        target, self.schedule_snapshots.get(program_id)
-                    )
-                if not schedule.program_is_enabled(target):
-                    raise schedule.ScheduleError(
-                        f"Program {target.get('name') or program_token} has nothing "
-                        "to run: give it a start time and a station duration (or "
-                        "a watering window) and a water budget above 0 first"
-                    )
-                programs[index] = target
-                snapshot_update = (program_id, None)
-            elif not schedule.is_parked(target):
-                # Parking an already parked program would save "never" as the
-                # schedule to come back to.
-                programs[index], snapshot = schedule.park_program(target)
-                snapshot_update = (program_id, snapshot)
-
-        async def _on_saved() -> None:
-            if snapshot_update is None:
-                return
-            program_id, snapshot = snapshot_update
-            if snapshot is None:
-                if self.schedule_snapshots.pop(program_id, None) is None:
-                    return
-            else:
-                self.schedule_snapshots[program_id] = snapshot
-            await self._snapshot_store.async_save(self.schedule_snapshots)
-
-        await self._write_programs(module, _mutate, push=push, on_saved=_on_saved)
+        await self.async_command_update_program(
+            module, program_token, {}, enabled=enabled, push=push
+        )
 
     @callback
     def _schedule_push(self, module_id: str) -> None:

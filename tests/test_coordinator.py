@@ -3176,11 +3176,7 @@ async def test_the_push_is_armed_before_the_write_lets_go_of_the_lock(coordinato
 
 
 async def test_an_edit_then_enabling_an_enabled_program_pushes_once(coordinator):
-    """set_program_schedule with schedule fields and ``enabled: true``.
-
-    The edit holds its push and the enable is a no-op; that no-op must still
-    arm the push the edit is waiting for.
-    """
+    """A push=False edit followed by a no-op write with push=True arms the push."""
     module = _module()
     coordinator.modules = {"m1": module}
     _arm_writes(coordinator, _write_page())
@@ -3195,6 +3191,46 @@ async def test_an_edit_then_enabling_an_enabled_program_pushes_once(coordinator)
 
     coordinator.client.async_update_programs.assert_awaited_once()
     coordinator._schedule_push.assert_called_once_with("m1")
+
+
+async def test_an_edit_with_enabled_runs_in_a_single_write(coordinator):
+    """Schedule changes and ``enabled`` apply together in one backup + PUT."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page({"weekDays": 0}))
+    coordinator.schedule_snapshots = {"p1": {"cycle": 0, "weekDays": 5}}
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 80}, enabled=True, push=True
+    )
+
+    coordinator.client.async_create_backup.assert_awaited_once()
+    coordinator.client.async_update_programs.assert_awaited_once()
+    assert _sent(coordinator)[0]["waterBudget"] == 80
+    assert _sent(coordinator)[0]["weekDays"] == 5
+    assert "p1" not in coordinator.schedule_snapshots
+
+
+async def test_an_edit_with_enabled_false_parks_the_new_recurrence(coordinator):
+    """Pre-configuring a program with ``enabled: false`` parks the new schedule."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page({"weekDays": 127}))
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(
+        module,
+        "Matin",
+        {"schedule_type": "weekly", "weekdays": ["mon", "wed"]},
+        enabled=False,
+        push=True,
+    )
+
+    coordinator.client.async_create_backup.assert_awaited_once()
+    coordinator.client.async_update_programs.assert_awaited_once()
+    assert _sent(coordinator)[0]["weekDays"] == 0
+    assert coordinator.schedule_snapshots["p1"]["weekDays"] == 0b101
 
 
 @pytest.mark.parametrize(

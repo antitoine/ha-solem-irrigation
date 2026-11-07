@@ -113,6 +113,8 @@ def entry(module) -> MagicMock:
     }
     coordinator.last_update_success = True
     coordinator.run_minutes = {"s1": 10}
+    coordinator.schedule_snapshots = {"p1": {"cycle": 0, "weekDays": 5}}
+    coordinator.pending_local_push = {"m1"}
     coordinator.flow = {
         "i1": SolemFlowReading(
             volume=3970.0,
@@ -287,6 +289,10 @@ async def test_diagnostics_includes_state_and_flow(hass, entry):
     assert result["modules"]["m1"]["is_relevant"] is True
     assert result["flow_readings"]["i1"]["volume"] == 3970.0
     assert result["coordinator"]["last_update_success"] is True
+    assert result["coordinator"]["schedule_snapshots"] == {
+        "p1": {"cycle": 0, "weekDays": 5}
+    }
+    assert result["coordinator"]["pending_local_push"] == ["m1"]
 
 
 async def test_diagnostics_includes_rain_sensors(hass, entry):
