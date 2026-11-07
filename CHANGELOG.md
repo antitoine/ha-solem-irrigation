@@ -7,14 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.12.0b1] - 2026-11-07
+## [0.12.0] - 2026-11-07
 
-First beta of 0.12.0, adding stored program schedules and editing
-([#3](https://github.com/antitoine/ha-solem-irrigation/issues/3),
-[#20](https://github.com/antitoine/ha-solem-irrigation/pull/20),
-[#23](https://github.com/antitoine/ha-solem-irrigation/pull/23)). Thanks to
-[@Tocio88](https://github.com/Tocio88) for the contribution. To install it,
-enable **Show beta versions** in HACS.
+Adds a *Schedule* sensor for stored programs, per-program *&lt;program&gt;
+schedule* switches, and actions to edit programs, push them to the controller,
+and save cloud backups
+([#3](https://github.com/antitoine/ha-solem-irrigation/issues/3)). Thanks to
+[@Tocio88](https://github.com/Tocio88) for the contribution.
 
 ### Added
 
@@ -474,8 +473,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.12.0b1...HEAD
-[0.12.0b1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.11.0...v0.12.0b1
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.1...v0.9.0
