@@ -16,6 +16,12 @@ below were reverse-engineered from the web app:
 * ``GET  /remote/module/getComputedSensorsData`` -> windowed sensor series (JSON)
 * ``POST /module/sendManualModuleCommand``     -> manual commands (form-urlencoded)
 * ``POST /module/{id}/all-stations-status``    -> LR-AG on/off + rain delay (JSON)
+* ``PUT  /program/update``                     -> replace the FULL program list (JSON)
+* ``POST /remote/module/configuration/and/programs`` -> push them to the controller
+                                                  (503 unreachable / 408 timeout)
+* ``POST /program/reportProgramsDataSent`` +
+  ``POST /module/reportModuleDataSent``        -> mark that push as delivered
+* ``GET/POST/DELETE /modules/{id}/backups[/{backupId}]`` -> cloud program backups
 
 Note that ``inputs`` (the module's sensors, e.g. a flow meter) are *not* part of
 the ``let module`` object: they live in a sibling ``var inputs`` array on the
@@ -109,6 +115,28 @@ class SolemAuthError(SolemError):
 
 class SolemConnectionError(SolemError):
     """The cloud could not be reached or returned an unexpected response."""
+
+
+class SolemValidationError(SolemError):
+    """The cloud answered a program update but rejected the program set.
+
+    ``messages`` carries the server's ``validationMessage`` entries: either a
+    code such as ``empty_stations`` or the names of the programs it flags.
+    """
+
+    def __init__(self, messages: list[str]) -> None:
+        """Keep the server's validation messages."""
+        super().__init__(f"MySOLEM rejected the programs: {', '.join(messages)}")
+        self.messages = messages
+
+
+class SolemDeviceUnreachableError(SolemConnectionError):
+    """The push to the controller failed (HTTP 503) or timed out (408)."""
+
+
+# How the cloud reports a push the controller never received.
+_DEVICE_UNREACHABLE_STATUSES = (503, 408)
+_XHR = {"X-Requested-With": "XMLHttpRequest"}
 
 
 def _extract_js_literal(html: str, marker: str, opener: str) -> Any | None:
@@ -500,6 +528,126 @@ class SolemApiClient:
                 "commandType": CMD_STATUS,
                 "commandParams": 0 if enabled else int(days),
             },
+        )
+
+    # -- writes (stored programs) -------------------------------------------
+
+    async def async_update_programs(
+        self,
+        module_id: str,
+        programs: list[dict[str, Any]],
+        programmation_type: int,
+    ) -> list[dict[str, Any]]:
+        """Replace a module's WHOLE program list in the cloud.
+
+        There is no per-program save: the array replaces the stored list, so a
+        program left out is deleted. Callers must send every program, not a
+        delta. ``programmation_type`` is the module's ``programmationType``.
+        Returns the server's ``updatedPrograms`` echo (the sent list when the
+        reply carries none).
+
+        Raises:
+            SolemValidationError: the server rejected the set.
+        """
+        await self._ensure_login()
+        data = await self._request_json(
+            "PUT",
+            "/program/update",
+            json_body={
+                "programs": programs,
+                "module": module_id,
+                "programmationtype": int(programmation_type),
+            },
+            headers=_XHR,
+        )
+        if not isinstance(data, dict):
+            return programs
+        if messages := data.get("validationMessage"):
+            raise SolemValidationError([str(m) for m in messages])
+        updated = data.get("updatedPrograms")
+        return updated if isinstance(updated, list) and updated else programs
+
+    async def async_push_configuration_and_programs(
+        self, module_id: str, relay_id: str | None
+    ) -> None:
+        """Push the module's cloud configuration and programs to the controller.
+
+        A LoRa module needs its gateway's ``relay_id``. The cloud answers 503
+        when the controller cannot be reached and 408 when the downlink times
+        out, both raised as :class:`SolemDeviceUnreachableError`: the cloud
+        edit stands either way, and the push can be retried.
+        """
+        body: dict[str, Any] = {"moduleId": module_id}
+        if relay_id:
+            body["relayId"] = relay_id
+        await self._ensure_login()
+        try:
+            await self._request_text(
+                "POST",
+                "/remote/module/configuration/and/programs",
+                json_body=body,
+                headers=_XHR,
+            )
+        except SolemConnectionError as err:
+            status = getattr(err.__cause__, "status", None)
+            if status in _DEVICE_UNREACHABLE_STATUSES:
+                raise SolemDeviceUnreachableError(
+                    f"The controller could not be reached (HTTP {status})"
+                ) from err
+            raise
+
+    async def async_report_programs_sent(
+        self, module_id: str, programs: list[dict[str, Any]]
+    ) -> None:
+        """Record a successful program push, as the web app does after one."""
+        await self._ensure_login()
+        await self._request_text(
+            "POST",
+            "/program/reportProgramsDataSent",
+            json_body={"programs": programs, "module": module_id},
+            headers=_XHR,
+        )
+
+    async def async_report_module_sent(self, module_id: str) -> None:
+        """Record a successful module-configuration push."""
+        await self._ensure_login()
+        await self._request_text(
+            "POST",
+            "/module/reportModuleDataSent",
+            json_body={"module": module_id},
+            headers=_XHR,
+        )
+
+    # -- program backups -----------------------------------------------------
+
+    async def async_list_backups(self, module_id: str) -> list[dict[str, Any]]:
+        """List a module's cloud backups."""
+        await self._ensure_login()
+        data = await self._request_json(
+            "GET", f"/modules/{module_id}/backups", headers=_XHR
+        )
+        return (
+            [backup for backup in data if isinstance(backup, dict)]
+            if isinstance(data, list)
+            else []
+        )
+
+    async def async_create_backup(self, module_id: str, name: str) -> dict[str, Any]:
+        """Create a named cloud backup of a module, programs included."""
+        await self._ensure_login()
+        data = await self._request_json(
+            "POST",
+            f"/modules/{module_id}/backups",
+            json_body={"backupName": name},
+            headers=_XHR,
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def async_delete_backup(self, module_id: str, backup_id: str) -> None:
+        """Delete a cloud backup."""
+        await self._ensure_login()
+        await self._request_text(
+            "DELETE", f"/modules/{module_id}/backups/{backup_id}", headers=_XHR
         )
 
     async def _send_command(self, serial: str, fields: dict[str, Any]) -> None:

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-07
+
+Adds a *Schedule* sensor for stored programs, per-program *&lt;program&gt;
+schedule* switches, and actions to edit programs, push them to the controller,
+and save cloud backups
+([#3](https://github.com/antitoine/ha-solem-irrigation/issues/3)). Thanks to
+[@Tocio88](https://github.com/Tocio88) for the contribution.
+
 ### Added
 
 - **Program schedules.** Each controller gets a *Schedule* sensor: its state is
@@ -14,8 +22,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   days, even/odd or every-N-days cycles, start times and per-station durations,
   or an LR-AG's watering windows) plus the runs due today and tomorrow. Edits
   made in MySOLEM show up on the next poll. Bluetooth-only controllers get it
-  too, read from MySOLEM's copy of their programs. Read-only for now.
-  ([#3](https://github.com/antitoine/ha-solem-irrigation/issues/3))
+  too, read from MySOLEM's copy of their programs.
+  ([#3](https://github.com/antitoine/ha-solem-irrigation/issues/3),
+  [#20](https://github.com/antitoine/ha-solem-irrigation/pull/20))
+- **Program editing.** A new `solem_irrigation.set_program_schedule` action
+  edits a stored program: its days (weekly, even/odd days, or every N days),
+  start times and per-station durations, an LR-AG's watering windows, its
+  water budget, and whether it is on. Each program also gets a *&lt;program&gt;
+  schedule* switch that turns it off the way MySOLEM does and back on with the
+  schedule it had. Every edit re-reads the programs first, so one made in
+  MySOLEM is never overwritten, backs them up in MySOLEM (keeping the newest
+  10 such backups), changes only the fields given, and is pushed to the
+  controller 90 seconds after the last edit, so a burst of edits costs one of
+  the pushes SOLEM rate-limits. `solem_irrigation.push_programs` pushes now,
+  and `solem_irrigation.create_backup` saves a named backup. A Bluetooth-only
+  controller gets the edit in MySOLEM only.
+  ([#3](https://github.com/antitoine/ha-solem-irrigation/issues/3),
+  [#23](https://github.com/antitoine/ha-solem-irrigation/pull/23))
 
 ## [0.11.0] - 2026-11-02
 
@@ -450,7 +473,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.8.1...v0.9.0

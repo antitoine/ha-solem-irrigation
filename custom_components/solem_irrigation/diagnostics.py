@@ -211,6 +211,8 @@ async def async_get_config_entry_diagnostics(
             "module_count": len(coordinator.modules),
             "relevant_module_ids": sorted(relevant),
             "run_minutes": coordinator.run_minutes,
+            "schedule_snapshots": coordinator.schedule_snapshots,
+            "pending_local_push": sorted(coordinator.pending_local_push),
         },
         "flow_readings": {
             meter_id: {

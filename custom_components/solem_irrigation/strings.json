@@ -62,6 +62,9 @@
     "switch": {
       "enabled": {
         "name": "Irrigation enabled"
+      },
+      "prog_enabled": {
+        "name": "{program} schedule"
       }
     },
     "select": {
@@ -152,6 +155,70 @@
         "duration": {
           "name": "Duration",
           "description": "Run time in minutes for a station. Defaults to the last used value; an explicit value is remembered for next time."
+        }
+      }
+    },
+    "set_program_schedule": {
+      "name": "Set program schedule",
+      "description": "Edits a stored program: its recurrence (days of the week, even or odd days, or every N days), its start times and station durations (classic controllers) or watering windows (LR-AG), its water budget, and whether it is on. The programs are backed up in MySOLEM first, saved there, then pushed to the controller.",
+      "fields": {
+        "program": {
+          "name": "Program",
+          "description": "Program to edit (name, index or id)."
+        },
+        "schedule_type": {
+          "name": "Schedule type",
+          "description": "Recurrence: weekly, even days, odd days, odd days except the 31st, or every N days (interval)."
+        },
+        "weekdays": {
+          "name": "Days of the week",
+          "description": "Days the program runs on (weekly schedule only)."
+        },
+        "every_days": {
+          "name": "Every N days",
+          "description": "Days between two runs (interval schedule only, 1-31)."
+        },
+        "offset_days": {
+          "name": "Starting in",
+          "description": "Days from today until the first run (interval schedule only; less than the interval)."
+        },
+        "water_budget": {
+          "name": "Water budget",
+          "description": "Scales every duration (100% runs them as programmed)."
+        },
+        "enabled": {
+          "name": "Enabled",
+          "description": "Turn the program on, or off (it stays stored but never runs)."
+        },
+        "start_times": {
+          "name": "Start times",
+          "description": "Classic controllers: up to 8 HH:MM start times; the stations run one after the other from each."
+        },
+        "durations": {
+          "name": "Station durations",
+          "description": "Classic controllers: minutes per station, keyed by station number (station 1 to 10 minutes: 1: 10). Stations left out keep their duration."
+        },
+        "windows": {
+          "name": "Watering windows",
+          "description": "LR-AG: up to 4 windows, each with start, end and optional soak_on_minutes / soak_off_minutes; leave the soak fields out to water throughout."
+        },
+        "push": {
+          "name": "Push to the controller",
+          "description": "Push the change to the controller (after a short delay that groups several edits). Off saves it in MySOLEM only; push it later with the push programs action."
+        }
+      }
+    },
+    "push_programs": {
+      "name": "Push programs",
+      "description": "Pushes the programs stored in MySOLEM to the controller now."
+    },
+    "create_backup": {
+      "name": "Back up programs",
+      "description": "Saves a named backup of the controller's programs in MySOLEM, which can be restored from the MySOLEM app.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "Name of the backup (a timestamp if left out)."
         }
       }
     }

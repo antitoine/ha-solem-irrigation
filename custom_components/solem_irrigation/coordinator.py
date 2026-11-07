@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, NoReturn
 
 import aiohttp
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
@@ -31,6 +33,7 @@ from .api import (
     apply_expression,
 )
 from .const import (
+    BACKUP_PREFIX,
     BLUETOOTH_ONLY_TYPES,
     CONF_EMAIL,
     CONF_PASSWORD,
@@ -47,10 +50,14 @@ from .const import (
     INPUT_TYPE_RAIN_SENSOR,
     INPUT_TYPE_TURBINE,
     LIVE_MODULE_FIELDS,
+    MAX_HA_BACKUPS,
     MAX_RAIN_DELAY_DAYS_AG,
     MAX_SCHEDULE_OCCURRENCES,
+    PUSH_DEBOUNCE_SECONDS,
+    PUSH_WARN_PER_DAY,
     RAIN_DELAY_PERMANENT,
     REGION_EUROPE,
+    SNAPSHOT_STORAGE_KEY,
     STORAGE_KEY,
     STORAGE_VERSION,
     TURBINE_IDLE_AFTER,
@@ -572,6 +579,37 @@ def _programming_out_of_sync(raw: dict[str, Any]) -> bool:
         return False
 
 
+def _backup_age_key(backup: dict[str, Any]) -> tuple[int, float, str]:
+    """Sort key putting backups oldest first, epoch numbers or ISO strings."""
+    created = backup.get("createdAt")
+    if isinstance(created, (int, float)):
+        return 1, float(created), ""
+    return 0, 0.0, str(created or "")
+
+
+def _find_program_raw(
+    module: SolemModule, programs: list[dict[str, Any]], token: str
+) -> int:
+    """Position in the wire list of the program ``token`` names.
+
+    Tried as the program's id, then as the run action resolves one: its
+    index, then its name (case-insensitive). Raises ValueError when none
+    matches.
+    """
+    text = str(token).strip()
+    folded = text.casefold()
+    index = str(int(text)) if text.isdecimal() else None
+    for matches in (
+        lambda raw: str(raw.get("id")) == text,
+        lambda raw: index is not None and str(raw.get("index")) == index,
+        lambda raw: str(raw.get("name") or "").casefold() == folded,
+    ):
+        for position, raw in enumerate(programs):
+            if isinstance(raw, dict) and matches(raw):
+                return position
+    raise ValueError(f"Unknown program '{token}' on {module.name}")
+
+
 @dataclass(slots=True)
 class SolemModule:
     """Static description of a module (controller, gateway, sensor…)."""
@@ -761,12 +799,36 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         # ON/OFF commands the cloud has not confirmed yet:
         # module id -> (enabled, days, issued at). See ``watering_enabled``.
         self._status_pending: dict[str, tuple[bool, int, datetime]] = {}
+        # Program editing. The recurrence a program had before its switch
+        # parked it, keyed by **program id** and persisted, so turning it back
+        # on restores that exact schedule.
+        self.schedule_snapshots: dict[str, dict[str, Any]] = {}
+        self._snapshot_store: Store[dict[str, dict[str, Any]]] = Store(
+            hass, STORAGE_VERSION, f"{SNAPSHOT_STORAGE_KEY}.{entry.entry_id}"
+        )
+        # Modules edited from Home Assistant whose programs have not been
+        # pushed to the controller yet, the push each one has waiting, and how
+        # many pushes each had today: (date, count).
+        self.pending_local_push: set[str] = set()
+        self._push_unsubs: dict[str, Callable[[], None]] = {}
+        self._push_counts: dict[str, tuple[date, int]] = {}
+        entry.async_on_unload(self._cancel_pending_pushes)
+        # One program write (or push, or re-read) at a time: a write re-reads
+        # the programs and replaces the whole list, so two at once would race,
+        # and a re-read landing mid-write would undo what it just adopted.
+        self._write_lock = asyncio.Lock()
 
     @callback
     def _cancel_scheduled_refresh(self) -> None:
         if self._refresh_unsub is not None:
             self._refresh_unsub()
             self._refresh_unsub = None
+
+    @callback
+    def _cancel_pending_pushes(self) -> None:
+        for unsub in self._push_unsubs.values():
+            unsub()
+        self._push_unsubs.clear()
 
     @callback
     def async_schedule_refresh(self, delay: float = 60.0) -> None:
@@ -809,6 +871,8 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
             self.run_minutes.update(
                 {k: int(v) for k, v in stored.items() if v is not None}
             )
+        if snapshots := await self._snapshot_store.async_load():
+            self.schedule_snapshots.update(snapshots)
         try:
             await self.client.async_login()
             module_ids = await self.client.async_get_module_ids()
@@ -993,33 +1057,53 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         timestamp is only adopted once that succeeded, so a failed re-read is
         retried on the next poll.
         """
-        try:
-            records = await self.client.async_get_module_fields(LIVE_MODULE_FIELDS)
-        except SolemAuthError as err:
-            raise ConfigEntryAuthFailed(str(err)) from err
-        except SolemConnectionError as err:
-            _LOGGER.debug("Module field refresh failed: %s", err)
-            return
-        for module_id, record in records.items():
-            if module := self.modules.get(module_id):
-                fresh = {k: v for k, v in record.items() if k in LIVE_MODULE_FIELDS}
-                remote = fresh.get("programmingUpdatedAt")
-                if (
-                    module.has_schedule
-                    and remote is not None
-                    # Compared as datetimes: the same instant can be spelled
-                    # with a ``Z`` or a ``+00:00`` suffix.
-                    and dt_util.parse_datetime(str(remote))
-                    != dt_util.parse_datetime(
-                        str(module.raw.get("programmingUpdatedAt") or "")
-                    )
-                    and not await self._async_reread_programs(module)
-                ):
-                    fresh.pop("programmingUpdatedAt")
-                    # Keep the pair consistent: a fresh sentAt against the stale
-                    # updatedAt would hide edits the controller has not got.
-                    fresh.pop("programmingSentAt", None)
-                module.raw.update(fresh)
+        # Held throughout, so a program write never lands between the
+        # projection and the re-read it may trigger: the re-read would then
+        # adopt a page from before the write, and the merge a stale timestamp.
+        async with self._write_lock:
+            try:
+                records = await self.client.async_get_module_fields(LIVE_MODULE_FIELDS)
+            except SolemAuthError as err:
+                raise ConfigEntryAuthFailed(str(err)) from err
+            except SolemConnectionError as err:
+                _LOGGER.debug("Module field refresh failed: %s", err)
+                return
+            for module_id, record in records.items():
+                if module := self.modules.get(module_id):
+                    await self._async_merge_module_fields(module, record)
+
+    async def _async_merge_module_fields(
+        self, module: SolemModule, record: dict[str, Any]
+    ) -> None:
+        """Merge one module's projected fields, re-reading its programs if due.
+
+        An edit from Home Assistant whose push failed, or was never asked for,
+        stays pending until the cloud itself reports the controller in sync,
+        e.g. after a push from the MySOLEM app.
+        """
+        fresh = {k: v for k, v in record.items() if k in LIVE_MODULE_FIELDS}
+        remote = fresh.get("programmingUpdatedAt")
+        if (
+            module.has_schedule
+            and remote is not None
+            # Compared as datetimes: the same instant can be spelled
+            # with a ``Z`` or a ``+00:00`` suffix.
+            and dt_util.parse_datetime(str(remote))
+            != dt_util.parse_datetime(str(module.raw.get("programmingUpdatedAt") or ""))
+            and not await self._async_reread_programs(module)
+        ):
+            fresh.pop("programmingUpdatedAt")
+            # Keep the pair consistent: a fresh sentAt against the stale
+            # updatedAt would hide edits the controller has not got.
+            fresh.pop("programmingSentAt", None)
+        module.raw.update(fresh)
+        if (
+            module.id in self.pending_local_push
+            and module.id not in self._push_unsubs
+            and "programmingUpdatedAt" in fresh
+            and not _programming_out_of_sync(module.raw)
+        ):
+            self.pending_local_push.discard(module.id)
 
     async def _async_reread_programs(self, module: SolemModule) -> bool:
         """Rebuild ``module``'s programs from a fresh read of its page.
@@ -1028,27 +1112,49 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         be read. Only the module record and its programs are touched: the live
         state and the pending ON/OFF bookkeeping are not, so the page's stored
         ``status`` never counts as the controller acknowledging a command.
+        Callers hold the write lock.
         """
         try:
-            obj, _inputs = await self.client.async_get_module_page(module.id)
+            await self._async_load_programs(module)
         except SolemAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except SolemError as err:
             _LOGGER.debug("Could not re-read programs of %s: %s", module.id, err)
             return False
+        return True
+
+    async def _async_load_programs(self, module: SolemModule) -> None:
+        """Read ``module``'s page and adopt its record and programs.
+
+        Raises a :class:`SolemError` (leaving the module untouched) when the
+        page cannot be read, parsed, or its programs decoded. Callers hold the
+        write lock.
+        """
+        obj, _inputs = await self.client.async_get_module_page(module.id)
         if not obj:
-            _LOGGER.debug("Re-reading %s returned no parseable data", module.id)
-            return False
+            raise SolemConnectionError("the module page held no parseable data")
         try:
             programs = _build_programs(obj)
-        except TypeError, ValueError, KeyError, AttributeError:
-            _LOGGER.debug("Re-reading %s returned undecodable programs", module.id)
-            return False
+        except (TypeError, ValueError, KeyError, AttributeError) as err:
+            raise SolemConnectionError(
+                "the module page held undecodable programs"
+            ) from err
         module.raw.update(obj)
         module.programs = programs
         if module.is_agricultural:
             _name_stations_after_programs(module)
-        return True
+        # A program no longer parked was changed since (in MySOLEM most
+        # likely): the recurrence saved when it was parked is stale.
+        stale = [
+            str(program.id)
+            for program in programs
+            if str(program.id) in self.schedule_snapshots
+            and not schedule.is_parked(program.raw)
+        ]
+        for program_id in stale:
+            del self.schedule_snapshots[program_id]
+        if stale:
+            await self._snapshot_store.async_save(self.schedule_snapshots)
 
     async def _async_poll_inputs(self, module_id: str) -> None:
         """Refresh every sensor reading on a module.
@@ -1401,7 +1507,8 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
             "next_run": min(next_starts) if next_starts else None,
             "programs": programs,
             "occurrences": occurrences[:MAX_SCHEDULE_OCCURRENCES],
-            "pending_push": _programming_out_of_sync(module.raw),
+            "pending_push": module_id in self.pending_local_push
+            or _programming_out_of_sync(module.raw),
         }
 
     def _apply_optimistic_watering(self, module_id: str, **fields: Any) -> None:
@@ -1565,3 +1672,325 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
                     rainDelay=0 if enabled else days,
                 )
         self.async_schedule_refresh()
+
+    # -- program editing ----------------------------------------------------
+    # Every write (1) re-reads the module page, so a concurrent edit made in
+    # MySOLEM is never overwritten with stale data, (2) rebuilds the WHOLE
+    # program list with only the target changed, bailing out if nothing did,
+    # (3) backs the programs up in the cloud, (4) saves them, and (5) arms a
+    # debounced push, so a burst of edits costs the controller one download.
+
+    async def _write_programs(
+        self,
+        module: SolemModule,
+        mutate: Callable[[list[dict[str, Any]]], None],
+        *,
+        push: bool = True,
+        on_saved: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        """Re-read ``module``'s programs, let ``mutate`` edit them, save them.
+
+        ``mutate`` edits a deep copy of the wire list in place; a field it does
+        not touch goes back exactly as it came. ``on_saved`` runs once the
+        cloud took the edit, still under the lock, so the next write sees what
+        it did. The cloud's echo is adopted at once, ahead of the next poll.
+        """
+        async with self._write_lock:
+            try:
+                await self._async_load_programs(module)
+                current = module.raw.get("programs") or []
+                programs = copy.deepcopy(current)
+                mutate(programs)
+                if programs == current:
+                    _LOGGER.debug(
+                        "Programs of %s unchanged; nothing to save", module.id
+                    )
+                    if on_saved is not None:
+                        await on_saved()
+                    if module.id in self.pending_local_push:
+                        # An earlier write held its push for this one.
+                        self._arm_push(module, push)
+                    self.async_update_listeners()
+                    return
+                await self.client.async_create_backup(
+                    module.id, f"{BACKUP_PREFIX} {dt_util.now():%Y-%m-%d %H:%M}"
+                )
+                updated = await self.client.async_update_programs(
+                    module.id, programs, int(module.raw.get("programmationType") or 0)
+                )
+            except SolemAuthError as err:
+                self._reauth(err)
+            # The cloud has the edit, whatever happens next.
+            self.pending_local_push.add(module.id)
+            self._arm_push(module, push)
+            if on_saved is not None:
+                await on_saved()
+            sent_ids = {str(p.get("id")) for p in programs}
+            if not (
+                isinstance(updated, list)
+                and all(isinstance(p, dict) for p in updated)
+                and {str(p.get("id")) for p in updated} == sent_ids
+            ):
+                _LOGGER.debug(
+                    "Unexpected echo of the programs of %s; keeping those sent",
+                    module.id,
+                )
+                updated = programs
+            try:
+                built = _build_programs({"programs": updated})
+            except (TypeError, ValueError, KeyError, AttributeError) as err:
+                raise SolemConnectionError(
+                    "the programs were saved, but the cloud's reply could not be read"
+                ) from err
+            module.raw["programs"] = updated
+            module.programs = built
+            if module.is_agricultural:
+                _name_stations_after_programs(module)
+            self.async_update_listeners()
+
+        await self._prune_ha_backups(module.id)
+
+    @callback
+    def _arm_push(self, module: SolemModule, push: bool) -> None:
+        """Arm the debounced push of ``module``, unless the cloud cannot."""
+        if not push:
+            return
+        if module.is_bluetooth_only:
+            # The cloud cannot reach it: the edit stands in MySOLEM, and the
+            # app hands it over the next time it connects over Bluetooth.
+            _LOGGER.debug("Not pushing to Bluetooth-only module %s", module.id)
+            return
+        self._schedule_push(module.id)
+
+    def _reauth(self, err: SolemAuthError) -> NoReturn:
+        """Ask the user to log in again, and fail the command in hand."""
+        self.config_entry.async_start_reauth(self.hass)
+        raise ConfigEntryAuthFailed(str(err)) from err
+
+    async def async_command_update_program(
+        self,
+        module: SolemModule,
+        program_token: str,
+        changes: dict[str, Any],
+        *,
+        enabled: bool | None = None,
+        push: bool = True,
+    ) -> None:
+        """Apply schedule ``changes`` (and optional ``enabled``) to one program."""
+        snapshot_update: tuple[str, dict[str, Any] | None] | None = None
+
+        def _mutate(programs: list[dict[str, Any]]) -> None:
+            nonlocal snapshot_update
+            index = _find_program_raw(module, programs, program_token)
+            if module.stations:
+                for key in changes.get("durations") or {}:
+                    try:
+                        slot = int(key)
+                    except TypeError, ValueError:
+                        continue  # apply_schedule_changes reports it
+                    if slot > len(module.stations):
+                        raise schedule.ScheduleError(
+                            f"Station {slot} does not exist on {module.name}"
+                        )
+            target = programs[index]
+            program_id = str(target.get("id"))
+            if changes:
+                target = schedule.apply_schedule_changes(
+                    target,
+                    changes,
+                    agricultural=module.is_agricultural,
+                    now_utc=dt_util.utcnow(),
+                )
+            if enabled is not None:
+                if enabled:
+                    if schedule.is_parked(target):
+                        target = schedule.restore_program(
+                            target, self.schedule_snapshots.get(program_id)
+                        )
+                    if not schedule.program_is_enabled(target):
+                        name = target.get("name") or program_token
+                        raise schedule.ScheduleError(
+                            f"Program {name} has nothing to run: give it a "
+                            "start time and a station duration (or a watering "
+                            "window) and a water budget above 0 first"
+                        )
+                    snapshot_update = (program_id, None)
+                elif not schedule.is_parked(target):
+                    # Parking an already parked program would save "never" as the
+                    # schedule to come back to.
+                    target, snapshot = schedule.park_program(target)
+                    snapshot_update = (program_id, snapshot)
+            elif not schedule.is_parked(target):
+                snapshot_update = (program_id, None)
+            programs[index] = target
+
+        async def _on_saved() -> None:
+            if snapshot_update is None:
+                return
+            program_id, snapshot = snapshot_update
+            if snapshot is None:
+                if self.schedule_snapshots.pop(program_id, None) is None:
+                    return
+            else:
+                self.schedule_snapshots[program_id] = snapshot
+            await self._snapshot_store.async_save(self.schedule_snapshots)
+
+        await self._write_programs(module, _mutate, push=push, on_saved=_on_saved)
+
+    async def async_command_set_program_enabled(
+        self,
+        module: SolemModule,
+        program_token: str,
+        enabled: bool,
+        *,
+        push: bool = True,
+    ) -> None:
+        """Turn one stored program on or off, the way the portal does.
+
+        Off parks it, after saving its recurrence; on restores that, or every
+        day without one. A program that is no longer parked when turned on was
+        changed in MySOLEM since, and that schedule wins. The saved recurrence
+        is only updated once the cloud took the write, before the next one can
+        read it.
+        """
+        await self.async_command_update_program(
+            module, program_token, {}, enabled=enabled, push=push
+        )
+
+    @callback
+    def _schedule_push(self, module_id: str) -> None:
+        """(Re)arm the debounced push of a module's programs."""
+        if (unsub := self._push_unsubs.pop(module_id, None)) is not None:
+            unsub()
+
+        async def _do_push(_now: datetime) -> None:
+            self._push_unsubs.pop(module_id, None)
+            if (
+                # Already pushed (a push now that ran meanwhile), or unloading.
+                module_id not in self.pending_local_push
+                or self.config_entry.state is not ConfigEntryState.LOADED
+                or (module := self.modules.get(module_id)) is None
+            ):
+                return
+            try:
+                await self.async_command_push_programs(module)
+            except (SolemError, ConfigEntryAuthFailed) as err:
+                _LOGGER.warning(
+                    "Could not push the programs to %s: %s. The change is saved "
+                    "in MySOLEM; push it again with the push_programs action",
+                    module.name,
+                    err,
+                )
+
+        self._push_unsubs[module_id] = async_call_later(
+            self.hass, PUSH_DEBOUNCE_SECONDS, _do_push
+        )
+
+    async def async_command_push_programs(self, module: SolemModule) -> None:
+        """Push the cloud's programs to the controller now.
+
+        A push that fails leaves the module pending, for a later one to retry.
+        """
+        if (unsub := self._push_unsubs.pop(module.id, None)) is not None:
+            unsub()
+        relay = self.module_state(module.id).get("relay") or module.raw.get("relay")
+        relay_id = relay.get("id") if isinstance(relay, dict) else relay
+        async with self._write_lock:
+            try:
+                # What the cloud pushes, so the report below says the same.
+                await self._async_load_programs(module)
+            except SolemError as err:
+                _LOGGER.debug("Pushing the cached programs of %s: %s", module.id, err)
+            try:
+                await self.client.async_push_configuration_and_programs(
+                    module.id, relay_id if isinstance(relay_id, str) else None
+                )
+            except SolemAuthError as err:
+                self._reauth(err)
+            self.pending_local_push.discard(module.id)
+            self._count_push(module.id)
+            # The controller has the programs now; a failed report only leaves
+            # the cloud's own bookkeeping behind.
+            try:
+                await self.client.async_report_programs_sent(
+                    module.id, [p.raw for p in module.programs]
+                )
+            except SolemError as err:
+                _LOGGER.warning(
+                    "Programs pushed to %s, but MySOLEM was not told which: %s",
+                    module.name,
+                    err,
+                )
+            try:
+                await self.client.async_report_module_sent(module.id)
+            except SolemError as err:
+                _LOGGER.warning(
+                    "Programs pushed to %s, but MySOLEM was not told: %s",
+                    module.name,
+                    err,
+                )
+            # Picks up the new ``programmingSentAt``.
+            try:
+                await self._async_reread_programs(module)
+            except ConfigEntryAuthFailed as err:
+                # The push went through; only the record is stale.
+                self.config_entry.async_start_reauth(self.hass)
+                _LOGGER.warning(
+                    "Programs pushed to %s, but MySOLEM logged us out before "
+                    "the record could be re-read: %s",
+                    module.name,
+                    err,
+                )
+        self.async_update_listeners()
+        self.async_schedule_refresh()
+
+    def _count_push(self, module_id: str) -> None:
+        """Count today's pushes to a module, warning past the daily budget."""
+        today = dt_util.now().date()
+        day, count = self._push_counts.get(module_id, (today, 0))
+        count = count + 1 if day == today else 1
+        self._push_counts[module_id] = (today, count)
+        if count > PUSH_WARN_PER_DAY:
+            _LOGGER.warning(
+                "Programs pushed to SOLEM module %s %d times today; SOLEM "
+                "rate-limits pushes to a controller",
+                module_id,
+                count,
+            )
+
+    async def async_command_create_backup(
+        self, module: SolemModule, name: str | None = None
+    ) -> None:
+        """Back the module's programs up in the cloud, under ``name``."""
+        try:
+            await self.client.async_create_backup(
+                module.id, name or f"HA backup {dt_util.now():%Y-%m-%d %H:%M}"
+            )
+        except SolemAuthError as err:
+            self._reauth(err)
+
+    async def _prune_ha_backups(self, module_id: str) -> None:
+        """Keep only the newest ``MAX_HA_BACKUPS`` backups made before an edit.
+
+        A backup under any other name, the user's own included, is left alone.
+        """
+        try:
+            backups = await self.client.async_list_backups(module_id)
+        except SolemError as err:
+            _LOGGER.debug("Backup pruning skipped for %s: %s", module_id, err)
+            return
+        ours = sorted(
+            (
+                backup
+                for backup in backups
+                if str(backup.get("name") or "").startswith(BACKUP_PREFIX)
+                and backup.get("id")
+            ),
+            key=_backup_age_key,
+            reverse=True,
+        )
+        for backup in ours[MAX_HA_BACKUPS:]:
+            try:
+                await self.client.async_delete_backup(module_id, backup["id"])
+            except SolemError as err:
+                _LOGGER.debug("Backup deletion failed for %s: %s", module_id, err)

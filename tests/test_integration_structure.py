@@ -70,7 +70,7 @@ def test_services_yaml_matches_strings():
     services = yaml.safe_load((COMPONENT / "services.yaml").read_text("utf-8"))
     assert set(services) == set(strings["services"])
     for service, spec in services.items():
-        documented = set(strings["services"][service]["fields"])
+        documented = set(strings["services"][service].get("fields", {}))
         declared = set(spec.get("fields", {}))
         assert declared == documented, service
 

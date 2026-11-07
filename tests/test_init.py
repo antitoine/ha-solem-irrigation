@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, ServiceNotSupported
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
@@ -142,6 +142,7 @@ async def test_legacy_entity_cleanup(hass: HomeAssistant, entry) -> None:
         "m1_stop",
         "m1_run_duration_s1",  # current per-station number (trailing id)
         "m1_enabled",
+        "m1_prog_p1",  # current per-program switch
         "bat1_battery",  # a genuinely battery-powered module keeps its sensor
     ]
     for unique_id in legacy + kept:
@@ -513,6 +514,11 @@ async def test_a_bluetooth_only_controller_leftover_is_removed(
     assert entities.async_get_entity_id("switch", DOMAIN, "b1_enabled") is None
     assert device("b1") is not None
     assert entities.async_get_entity_id("sensor", DOMAIN, "b1_schedule") is not None
+    # Its program switch is current, and kept from one start to the next: the
+    # cloud can still edit the program.
+    assert entities.async_get_entity_id("switch", DOMAIN, "b1_prog_p1") is not None
+    _async_cleanup_legacy_entities(hass, entry)
+    assert entities.async_get_entity_id("switch", DOMAIN, "b1_prog_p1") is not None
     # The LoRa controller next to it is untouched.
     assert device("m1") is not None
     assert entities.async_get_entity_id("switch", DOMAIN, "m1_enabled") is not None
@@ -675,3 +681,75 @@ async def test_only_a_device_that_left_the_account_can_be_removed(
     assert await async_remove_config_entry_device(hass, entry, current) is False
     assert await async_remove_config_entry_device(hass, entry, still_listed) is True
     assert await async_remove_config_entry_device(hass, entry, gone) is True
+
+
+async def test_program_actions_reach_only_the_controller_switch(
+    hass: HomeAssistant, entry
+) -> None:
+    """Each program has a switch on the controller's device, too.
+
+    An action aimed at the device must still run once, on the Irrigation
+    enabled switch, and one aimed at a program switch is refused rather than
+    crashing on a method that switch does not have.
+    """
+    program = {
+        "id": "p1",
+        "name": "Matin",
+        "index": 1,
+        "cycle": 0,
+        "weekDays": 127,
+        "startTimes": [360] + [-1] * 7,
+        "stationsDuration": [600] + [0] * 11,
+    }
+    controller = {**CONTROLLER, "programs": [program]}
+    with (
+        patch(_LOGIN, AsyncMock(return_value="uid")),
+        patch(_IDS, AsyncMock(return_value=["m1"])),
+        patch(_GET, AsyncMock(return_value=(controller, []))),
+        patch(_STATE, AsyncMock(return_value={})),
+        patch(_FIELDS, AsyncMock(return_value={})),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    entity_id = er.async_get(hass).async_get_entity_id("switch", DOMAIN, "m1_prog_p1")
+    state = hass.states.get(entity_id)
+    assert state.state == "on"
+    assert state.name == "Controller Matin schedule"
+    assert state.attributes["icon"] == "mdi:calendar-check"
+
+    coordinator = entry.runtime_data
+    coordinator.async_command_push_programs = AsyncMock()
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "m1"), entry.entry_id
+    )
+    await hass.services.async_call(
+        DOMAIN, "push_programs", target={"device_id": device.id}, blocking=True
+    )
+    coordinator.async_command_push_programs.assert_awaited_once()
+
+    coordinator.async_command_update_program = AsyncMock()
+    await hass.services.async_call(
+        DOMAIN,
+        "set_program_schedule",
+        {"program": "Matin", "weekdays": "sat", "durations": {1: "7.5"}},
+        target={"device_id": device.id},
+        blocking=True,
+    )
+    coordinator.async_command_update_program.assert_awaited_once_with(
+        coordinator.modules["m1"],
+        "Matin",
+        {"weekdays": ["sat"], "durations": {"1": 7.5}},
+        push=True,
+    )
+
+    with pytest.raises(ServiceNotSupported):
+        await hass.services.async_call(
+            DOMAIN,
+            "run",
+            {"mode": "stop"},
+            target={"entity_id": entity_id},
+            blocking=True,
+        )
+
+    await hass.config_entries.async_unload(entry.entry_id)

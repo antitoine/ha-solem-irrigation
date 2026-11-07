@@ -1,11 +1,14 @@
 """Tests for the SOLEM data update coordinator."""
 
 import asyncio
+import copy
+import logging
 from datetime import date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     ConfigEntryNotReady,
@@ -13,13 +16,18 @@ from homeassistant.exceptions import (
 )
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.solem_irrigation import coordinator as coordinator_module
 from custom_components.solem_irrigation.api import (
     SolemAuthError,
     SolemConnectionError,
+    SolemDeviceUnreachableError,
     SolemError,
+    SolemValidationError,
 )
 from custom_components.solem_irrigation.const import (
     CONF_EMAIL,
@@ -28,6 +36,7 @@ from custom_components.solem_irrigation.const import (
     DEFAULT_RUN_MINUTES,
     DOMAIN,
     ENABLE_ACK_GRACE,
+    PUSH_DEBOUNCE_SECONDS,
 )
 from custom_components.solem_irrigation.coordinator import (
     SolemDataUpdateCoordinator,
@@ -48,8 +57,10 @@ from custom_components.solem_irrigation.coordinator import (
     _compute_flow_rate,
     _compute_turbine_reading,
     _find_by_token,
+    _find_program_raw,
     _weather_reading,
 )
+from custom_components.solem_irrigation.schedule import ScheduleError
 
 FLOW_INPUT = {
     "id": "i1",
@@ -118,6 +129,8 @@ async def coordinator(hass) -> SolemDataUpdateCoordinator:
     coord = SolemDataUpdateCoordinator(hass, entry)
     coord._store.async_load = AsyncMock(return_value=None)
     coord._store.async_save = AsyncMock()
+    coord._snapshot_store.async_load = AsyncMock(return_value=None)
+    coord._snapshot_store.async_save = AsyncMock()
     # Every poll now also re-reads the cheap module-field projection; tests that
     # care about it override this.
     coord.client.async_get_module_fields = AsyncMock(return_value={})
@@ -2861,3 +2874,1144 @@ async def test_poll_leaves_a_probe_unread_when_the_window_fetch_fails(coordinato
     await coordinator._async_update_data()
 
     assert coordinator.weather_reading("w1") is None
+
+
+# -- program editing ------------------------------------------------------------
+
+
+def _write_page(program_extra: dict | None = None, **record) -> dict:
+    """A module page as the re-read before every write returns it."""
+    program = {
+        "id": "p1",
+        "name": "Matin",
+        "index": 1,
+        "cycle": 0,
+        "weekDays": 127,
+        "waterBudget": 100,
+        "startTimes": [680] + [-1] * 7,
+        "stationsDuration": [7200] + [0] * 11,
+        # A field this integration knows nothing about must round-trip.
+        "lastSentProgramsSnapshot": {"nested": [1, 2]},
+    }
+    program.update(program_extra or {})
+    other = {
+        "id": "p2",
+        "name": "Sera",
+        "index": 2,
+        "cycle": 0,
+        "weekDays": 0,
+        "waterBudget": 100,
+        "startTimes": [-1] * 8,
+        "stationsDuration": [0] * 12,
+    }
+    return {
+        "name": "Controller",
+        "typeIsWatering": True,
+        "programmationType": 1,
+        "programmingUpdatedAt": T0,
+        "programs": [program, other],
+        **record,
+    }
+
+
+def _arm_writes(coordinator, page: dict, order: list[str] | None = None) -> None:
+    """Mock every client call a write makes; ``order`` records the sequence."""
+
+    def _tracked(name: str, side):
+        async def _effect(*args):
+            if order is not None:
+                order.append(name)
+            return side(*args)
+
+        return AsyncMock(side_effect=_effect)
+
+    coordinator.client.async_get_module_page = _tracked(
+        "page", lambda _mid: (copy.deepcopy(page), [])
+    )
+    coordinator.client.async_create_backup = _tracked("backup", lambda *_: {})
+    coordinator.client.async_update_programs = _tracked(
+        "update", lambda _mid, programs, _ptype: copy.deepcopy(programs)
+    )
+    coordinator.client.async_list_backups = AsyncMock(return_value=[])
+    coordinator.client.async_delete_backup = AsyncMock()
+
+
+def _sent(coordinator) -> list[dict]:
+    return coordinator.client.async_update_programs.call_args[0][1]
+
+
+def test_find_program_raw_by_id_then_index_then_name():
+    module = _module()
+    programs = [
+        {"id": "a", "name": "2", "index": 1},
+        {"id": "b", "name": "Soir", "index": 2},
+    ]
+    assert _find_program_raw(module, programs, "b") == 1
+    assert _find_program_raw(module, programs, " soir ") == 1
+    # The index wins over a name that looks like one, as for the run action.
+    assert _find_program_raw(module, programs, "2") == 1
+    assert _find_program_raw(module, programs, "02") == 1
+    assert _find_program_raw(module, programs, "1") == 0
+    with pytest.raises(ValueError, match="Unknown program"):
+        _find_program_raw(module, programs, "ghost")
+
+
+async def test_setup_loads_the_stored_snapshots(coordinator):
+    coordinator._snapshot_store.async_load = AsyncMock(
+        return_value={"p1": {"cycle": 4}}
+    )
+    coordinator.client.async_login = AsyncMock(return_value="uid")
+    coordinator.client.async_get_module_ids = AsyncMock(return_value=[])
+
+    await coordinator.async_setup()
+
+    assert coordinator.schedule_snapshots == {"p1": {"cycle": 4}}
+
+
+async def test_write_rereads_then_backs_up_then_saves(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    order: list[str] = []
+    _arm_writes(coordinator, _write_page(), order)
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 80}
+    )
+
+    assert order == ["page", "backup", "update"]
+    name = coordinator.client.async_create_backup.call_args[0][1]
+    assert name.startswith("HA pre-change 20")
+    coordinator._schedule_push.assert_called_once_with("m1")
+    assert "m1" in coordinator.pending_local_push
+
+
+async def test_write_sends_the_whole_list_with_only_the_target_changed(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    page = _write_page()
+    _arm_writes(coordinator, page)
+    coordinator._schedule_push = MagicMock()
+    listener = MagicMock()
+    remove_listener = coordinator.async_add_listener(listener)
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 80}
+    )
+
+    sent = _sent(coordinator)
+    assert sent[0] == {**page["programs"][0], "waterBudget": 80}
+    assert sent[1] == page["programs"][1]
+    # programmationType comes from the freshly read record.
+    assert coordinator.client.async_update_programs.call_args[0][2] == 1
+    # The echo is adopted at once, ahead of any poll.
+    assert module.programs[0].raw["waterBudget"] == 80
+    assert module.raw["programs"][0]["waterBudget"] == 80
+    listener.assert_called()
+    remove_listener()
+
+
+async def test_write_never_sends_programs_older_than_the_cloud(coordinator):
+    """An edit made in MySOLEM since setup is what the write builds on."""
+    module = _module()  # setup saw a program named "Matin" with no schedule
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page({"name": "Matin", "weekDays": 3}))
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 50}
+    )
+
+    assert _sent(coordinator)[0]["weekDays"] == 3
+
+
+async def test_write_adopts_the_echo_of_an_ag_module_and_renames_stations(coordinator):
+    ag = _ag_scheduled(_ag_program_raw(0))
+    coordinator.modules = {"ag1": ag}
+    page = {"typeIsAgricultural": True, "programs": [_ag_program_raw(0)]}
+    _arm_writes(coordinator, page)
+    coordinator.client.async_update_programs = AsyncMock(
+        return_value=[_ag_program_raw(0, name="Vigne", waterBudget=50)]
+    )
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(ag, "Rang 1", {"water_budget": 50})
+
+    assert coordinator.client.async_update_programs.call_args[0][2] == 0
+    assert [s.name for s in ag.stations] == ["Vigne"]
+
+
+async def test_write_validation_blocks_before_the_cloud(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    coordinator._schedule_push = MagicMock()
+
+    with pytest.raises(ScheduleError):
+        await coordinator.async_command_update_program(
+            module, "Matin", {"windows": [{"start": "06:00", "end": "07:00"}]}
+        )
+
+    coordinator.client.async_create_backup.assert_not_awaited()
+    coordinator.client.async_update_programs.assert_not_awaited()
+    coordinator._schedule_push.assert_not_called()
+    assert "m1" not in coordinator.pending_local_push
+
+
+async def test_write_of_an_unknown_program_is_refused(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+
+    with pytest.raises(ValueError, match="Unknown program"):
+        await coordinator.async_command_update_program(
+            module, "ghost", {"water_budget": 80}
+        )
+    coordinator.client.async_update_programs.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        AsyncMock(return_value=({}, [])),
+        AsyncMock(return_value=({"programs": [{"id": "p1", "index": None}]}, [])),
+        AsyncMock(side_effect=SolemConnectionError("boom")),
+    ],
+)
+async def test_write_without_a_readable_page_writes_nothing(coordinator, page):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    coordinator.client.async_get_module_page = page
+
+    with pytest.raises(SolemConnectionError):
+        await coordinator.async_command_update_program(
+            module, "Matin", {"water_budget": 80}
+        )
+    coordinator.client.async_update_programs.assert_not_awaited()
+    assert [p.name for p in module.programs] == ["Matin"]
+
+
+async def test_write_that_changes_nothing_skips_backup_save_and_push(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 100}
+    )
+
+    coordinator.client.async_create_backup.assert_not_awaited()
+    coordinator.client.async_update_programs.assert_not_awaited()
+    coordinator._schedule_push.assert_not_called()
+    assert "m1" not in coordinator.pending_local_push
+    # The re-read alone still refreshed the programs.
+    assert module.programs[0].raw["weekDays"] == 127
+
+
+async def test_write_rejected_by_the_cloud_is_not_pending(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    coordinator.client.async_update_programs = AsyncMock(
+        side_effect=SolemValidationError(["empty_stations"])
+    )
+    coordinator._schedule_push = MagicMock()
+
+    with pytest.raises(SolemValidationError):
+        await coordinator.async_command_update_program(
+            module, "Matin", {"water_budget": 80}
+        )
+    assert "m1" not in coordinator.pending_local_push
+    coordinator._schedule_push.assert_not_called()
+
+
+async def test_write_without_push_saves_in_the_cloud_only(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 80}, push=False
+    )
+
+    coordinator.client.async_update_programs.assert_awaited_once()
+    coordinator._schedule_push.assert_not_called()
+    assert "m1" in coordinator.pending_local_push
+
+
+async def test_write_to_a_bluetooth_only_module_is_never_pushed(coordinator, caplog):
+    module = _module(type="bl-ip", raw={"typeIsWatering": True})
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page(isBluetoothOnly=True))
+    coordinator._schedule_push = MagicMock()
+
+    with caplog.at_level(logging.DEBUG):
+        await coordinator.async_command_update_program(
+            module, "Matin", {"water_budget": 80}
+        )
+
+    coordinator.client.async_update_programs.assert_awaited_once()
+    coordinator._schedule_push.assert_not_called()
+    assert "m1" in coordinator.pending_local_push
+    assert "Bluetooth-only" in caplog.text
+
+
+async def test_the_push_is_armed_before_the_write_lets_go_of_the_lock(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    held: list[bool] = []
+    coordinator._schedule_push = MagicMock(
+        side_effect=lambda _mid: held.append(coordinator._write_lock.locked())
+    )
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 80}
+    )
+
+    assert held == [True]
+
+
+async def test_an_edit_then_enabling_an_enabled_program_pushes_once(coordinator):
+    """A push=False edit followed by a no-op write with push=True arms the push."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 80}, push=False
+    )
+    await coordinator.async_command_set_program_enabled(
+        module, "Matin", True, push=True
+    )
+
+    coordinator.client.async_update_programs.assert_awaited_once()
+    coordinator._schedule_push.assert_called_once_with("m1")
+
+
+async def test_an_edit_with_enabled_runs_in_a_single_write(coordinator):
+    """Schedule changes and ``enabled`` apply together in one backup + PUT."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page({"weekDays": 0}))
+    coordinator.schedule_snapshots = {"p1": {"cycle": 0, "weekDays": 5}}
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 80}, enabled=True, push=True
+    )
+
+    coordinator.client.async_create_backup.assert_awaited_once()
+    coordinator.client.async_update_programs.assert_awaited_once()
+    assert _sent(coordinator)[0]["waterBudget"] == 80
+    assert _sent(coordinator)[0]["weekDays"] == 5
+    assert "p1" not in coordinator.schedule_snapshots
+
+
+async def test_an_edit_with_enabled_false_parks_the_new_recurrence(coordinator):
+    """Pre-configuring a program with ``enabled: false`` parks the new schedule."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page({"weekDays": 127}))
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(
+        module,
+        "Matin",
+        {"schedule_type": "weekly", "weekdays": ["mon", "wed"]},
+        enabled=False,
+        push=True,
+    )
+
+    coordinator.client.async_create_backup.assert_awaited_once()
+    coordinator.client.async_update_programs.assert_awaited_once()
+    assert _sent(coordinator)[0]["weekDays"] == 0
+    assert coordinator.schedule_snapshots["p1"]["weekDays"] == 0b101
+
+
+@pytest.mark.parametrize(
+    ("pending", "push", "bluetooth_only"),
+    [(False, True, False), (True, False, False), (True, True, True)],
+)
+async def test_a_no_op_write_arms_no_push_it_has_no_reason_to(
+    coordinator, pending, push, bluetooth_only
+):
+    module = _module(type="bl-ip" if bluetooth_only else "LR-IS")
+    coordinator.modules = {"m1": module}
+    if pending:
+        coordinator.pending_local_push.add("m1")
+    _arm_writes(coordinator, _write_page(isBluetoothOnly=bluetooth_only))
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 100}, push=push
+    )
+
+    coordinator.client.async_update_programs.assert_not_awaited()
+    coordinator._schedule_push.assert_not_called()
+
+
+async def test_a_partial_echo_keeps_every_program_sent(coordinator, caplog):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    page = _write_page()
+    _arm_writes(coordinator, page)
+    coordinator.client.async_update_programs = AsyncMock(
+        return_value=[{**page["programs"][0], "waterBudget": 80}]
+    )
+    coordinator._schedule_push = MagicMock()
+
+    with caplog.at_level(logging.DEBUG):
+        await coordinator.async_command_update_program(
+            module, "Matin", {"water_budget": 80}
+        )
+
+    assert [p.id for p in module.programs] == ["p1", "p2"]
+    assert module.raw["programs"] == _sent(coordinator)
+    assert "echo" in caplog.text
+
+
+@pytest.mark.parametrize("echo", [None, {"id": "p1"}, "ok"])
+async def test_an_echo_that_is_no_program_list_is_ignored(coordinator, echo):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    coordinator.client.async_update_programs = AsyncMock(return_value=echo)
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 80}
+    )
+
+    assert module.raw["programs"] == _sent(coordinator)
+    assert module.programs[0].raw["waterBudget"] == 80
+
+
+async def test_an_undecodable_echo_still_leaves_the_saved_edit_pending(coordinator):
+    """The cloud has the edit: it must be pushed, and its snapshot kept."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    page = _write_page({"weekDays": 5})
+    _arm_writes(coordinator, page)
+    coordinator.client.async_update_programs = AsyncMock(
+        return_value=[{"id": "p1", "index": None}, {"id": "p2", "index": 2}]
+    )
+    coordinator._schedule_push = MagicMock()
+
+    with pytest.raises(SolemConnectionError):
+        await coordinator.async_command_set_program_enabled(module, "Matin", False)
+
+    assert "m1" in coordinator.pending_local_push
+    coordinator._schedule_push.assert_called_once_with("m1")
+    assert coordinator.schedule_snapshots["p1"]["weekDays"] == 5
+    coordinator._snapshot_store.async_save.assert_awaited()
+
+
+async def test_a_quick_off_then_on_restores_the_recurrence(coordinator):
+    """The second toggle must see the snapshot the first one took."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    cloud = {"page": _write_page({"cycle": 4, "numberOfDays": 3, "synchroDay": 1})}
+    original = copy.deepcopy(cloud["page"]["programs"][0])
+    gate = asyncio.Event()
+
+    async def page(_mid):
+        await asyncio.sleep(0)
+        return copy.deepcopy(cloud["page"]), []
+
+    async def update(_mid, programs, _ptype):
+        await gate.wait()
+        cloud["page"]["programs"] = copy.deepcopy(programs)
+        return copy.deepcopy(programs)
+
+    async def listing(_mid):
+        for _ in range(10):  # a real round trip
+            await asyncio.sleep(0)
+        return []
+
+    _arm_writes(coordinator, cloud["page"])
+    coordinator.client.async_get_module_page = AsyncMock(side_effect=page)
+    coordinator.client.async_update_programs = AsyncMock(side_effect=update)
+    coordinator.client.async_list_backups = AsyncMock(side_effect=listing)
+    coordinator._schedule_push = MagicMock()
+
+    both = asyncio.gather(
+        coordinator.async_command_set_program_enabled(module, "Matin", False),
+        coordinator.async_command_set_program_enabled(module, "Matin", True),
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+    gate.set()
+    await both
+
+    assert coordinator.client.async_update_programs.await_count == 2
+    assert cloud["page"]["programs"][0] == original
+    assert coordinator.schedule_snapshots == {}
+
+
+async def test_a_snapshot_goes_once_the_program_is_unparked_elsewhere(coordinator):
+    """Re-enabled in MySOLEM, then parked there again: on is every day.
+
+    The old recurrence is no longer the one to come back to.
+    """
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page({"weekDays": 0b0000101}))
+    coordinator._schedule_push = MagicMock()
+    await coordinator.async_command_set_program_enabled(module, "Matin", False)
+    assert coordinator.schedule_snapshots["p1"]["weekDays"] == 5
+    # Another module's program, and this module's parked one, are left alone.
+    coordinator.schedule_snapshots["p9"] = {"cycle": 0, "weekDays": 3}
+    coordinator.schedule_snapshots["p2"] = {"cycle": 0, "weekDays": 3}
+    coordinator._snapshot_store.async_save.reset_mock()
+
+    _arm_writes(coordinator, _write_page({"weekDays": 127}))
+    assert await coordinator._async_reread_programs(module)
+
+    assert set(coordinator.schedule_snapshots) == {"p2", "p9"}
+    coordinator._snapshot_store.async_save.assert_awaited_once_with(
+        coordinator.schedule_snapshots
+    )
+
+    _arm_writes(coordinator, _write_page({"weekDays": 0}))
+    await coordinator.async_command_set_program_enabled(module, "Matin", True)
+
+    assert _sent(coordinator)[0]["weekDays"] == 127
+
+
+@pytest.mark.parametrize("slot", ["2", "13", "+2", "0_2"])
+async def test_a_duration_for_a_missing_station_is_refused(coordinator, slot):
+    module = _module()  # one station
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+
+    with pytest.raises(ScheduleError, match=f"Station {int(slot)} does not exist"):
+        await coordinator.async_command_update_program(
+            module, "Matin", {"durations": {slot: 10}}
+        )
+    coordinator.client.async_update_programs.assert_not_awaited()
+
+
+async def test_an_expired_session_after_a_push_keeps_the_push(hass, coordinator):
+    """A push that went through is not undone by the re-read logging us out."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.pending_local_push = {"m1"}
+    _arm_push(coordinator)
+    coordinator.client.async_get_module_page = AsyncMock(
+        side_effect=[({"programs": []}, []), SolemAuthError("no")]
+    )
+
+    await coordinator.async_command_push_programs(module)
+    await hass.async_block_till_done()
+
+    coordinator.client.async_push_configuration_and_programs.assert_awaited_once()
+    assert "m1" not in coordinator.pending_local_push
+    assert _reauth_flows(hass)
+
+
+async def test_a_duration_slot_is_checked_against_the_wire_without_stations(
+    coordinator,
+):
+    module = _module(stations=[])
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    coordinator._schedule_push = MagicMock()
+
+    with pytest.raises(ScheduleError, match="out of range"):
+        await coordinator.async_command_update_program(
+            module, "Matin", {"durations": {"13": 10}}
+        )
+    await coordinator.async_command_update_program(
+        module, "Matin", {"durations": {"2": 10}}
+    )
+    assert _sent(coordinator)[0]["stationsDuration"][1] == 600
+
+
+def _reauth_flows(hass) -> list:
+    return [
+        flow
+        for flow in hass.config_entries.flow.async_progress()
+        if flow["context"].get("source") == "reauth"
+        and flow["context"].get("entry_id") == "abc"
+    ]
+
+
+@pytest.mark.parametrize("failing", ["async_get_module_page", "async_update_programs"])
+async def test_an_expired_session_during_a_write_starts_reauth(
+    hass, coordinator, failing
+):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    setattr(coordinator.client, failing, AsyncMock(side_effect=SolemAuthError("no")))
+    coordinator._schedule_push = MagicMock()
+
+    with pytest.raises(ConfigEntryAuthFailed, match="no"):
+        await coordinator.async_command_update_program(
+            module, "Matin", {"water_budget": 80}
+        )
+    await hass.async_block_till_done()
+
+    assert _reauth_flows(hass)
+    assert "m1" not in coordinator.pending_local_push
+
+
+async def test_an_expired_session_during_a_push_or_backup_starts_reauth(
+    hass, coordinator
+):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.pending_local_push = {"m1"}
+    _arm_push(coordinator)
+    coordinator.client.async_push_configuration_and_programs = AsyncMock(
+        side_effect=SolemAuthError("no")
+    )
+    coordinator.client.async_create_backup = AsyncMock(side_effect=SolemAuthError("no"))
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator.async_command_push_programs(module)
+    assert "m1" in coordinator.pending_local_push
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator.async_command_create_backup(module)
+    await hass.async_block_till_done()
+
+    # One flow per entry, however many times it was asked for.
+    assert len(_reauth_flows(hass)) == 1
+
+
+async def test_park_then_restore_brings_the_exact_schedule_back(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    page = _write_page({"cycle": 4, "numberOfDays": 3, "synchroDay": 1})
+    _arm_writes(coordinator, page)
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_set_program_enabled(module, "Matin", False)
+
+    parked = _sent(coordinator)[0]
+    assert (parked["cycle"], parked["weekDays"]) == (0, 0)
+    assert coordinator.schedule_snapshots["p1"]["cycle"] == 4
+    coordinator._snapshot_store.async_save.assert_awaited_with(
+        coordinator.schedule_snapshots
+    )
+
+    # The cloud now holds the parked program.
+    _arm_writes(coordinator, {**page, "programs": [parked, page["programs"][1]]})
+    await coordinator.async_command_set_program_enabled(module, "p1", True)
+
+    assert _sent(coordinator)[0] == page["programs"][0]
+    assert "p1" not in coordinator.schedule_snapshots
+
+
+async def test_restore_without_a_snapshot_runs_every_day(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page({"weekDays": 0}))
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_set_program_enabled(module, "Matin", True)
+
+    assert _sent(coordinator)[0]["weekDays"] == 127
+    coordinator._snapshot_store.async_save.assert_not_awaited()
+
+
+async def test_enable_keeps_a_schedule_changed_in_mysolem(coordinator):
+    """No longer parked: someone re-enabled it since, and their schedule wins.
+
+    That makes the write a no-op (no backup, save or push), and the stale
+    snapshot is dropped.
+    """
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.schedule_snapshots = {"p1": {"cycle": 4, "numberOfDays": 3}}
+    _arm_writes(coordinator, _write_page({"weekDays": 63}))
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator.async_command_set_program_enabled(module, "Matin", True)
+
+    coordinator.client.async_create_backup.assert_not_awaited()
+    coordinator.client.async_update_programs.assert_not_awaited()
+    coordinator._schedule_push.assert_not_called()
+    assert coordinator.schedule_snapshots == {}
+    coordinator._snapshot_store.async_save.assert_awaited_once_with({})
+    assert module.programs[0].raw["weekDays"] == 63
+
+
+async def test_parking_a_parked_program_keeps_its_snapshot(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.schedule_snapshots = {"p1": {"cycle": 4, "numberOfDays": 3}}
+    _arm_writes(coordinator, _write_page({"weekDays": 0}))
+
+    await coordinator.async_command_set_program_enabled(module, "Matin", False)
+
+    coordinator.client.async_update_programs.assert_not_awaited()
+    assert coordinator.schedule_snapshots == {"p1": {"cycle": 4, "numberOfDays": 3}}
+    coordinator._snapshot_store.async_save.assert_not_awaited()
+
+
+async def test_enabling_a_program_with_nothing_to_run_is_refused(coordinator):
+    """The switch would otherwise stay off without saying why."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.schedule_snapshots = {"p2": {"cycle": 0, "weekDays": 5}}
+    _arm_writes(coordinator, _write_page())
+
+    with pytest.raises(ScheduleError, match="nothing to run"):
+        await coordinator.async_command_set_program_enabled(module, "Sera", True)
+
+    coordinator.client.async_update_programs.assert_not_awaited()
+    assert coordinator.schedule_snapshots == {"p2": {"cycle": 0, "weekDays": 5}}
+
+
+async def test_a_failed_park_saves_no_snapshot(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    coordinator.client.async_update_programs = AsyncMock(
+        side_effect=SolemConnectionError("boom")
+    )
+
+    with pytest.raises(SolemConnectionError):
+        await coordinator.async_command_set_program_enabled(module, "Matin", False)
+
+    assert coordinator.schedule_snapshots == {}
+    coordinator._snapshot_store.async_save.assert_not_awaited()
+
+
+async def test_a_failed_restore_keeps_the_snapshot(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.schedule_snapshots = {"p1": {"cycle": 4, "numberOfDays": 3}}
+    _arm_writes(coordinator, _write_page({"weekDays": 0}))
+    coordinator.client.async_update_programs = AsyncMock(
+        side_effect=SolemConnectionError("boom")
+    )
+
+    with pytest.raises(SolemConnectionError):
+        await coordinator.async_command_set_program_enabled(module, "Matin", True)
+
+    assert "p1" in coordinator.schedule_snapshots
+
+
+def _arm_push(coordinator) -> None:
+    coordinator.client.async_push_configuration_and_programs = AsyncMock()
+    coordinator.client.async_report_programs_sent = AsyncMock()
+    coordinator.client.async_report_module_sent = AsyncMock()
+    coordinator.client.async_get_module_page = AsyncMock(
+        return_value=(_write_page(programmingSentAt=T1), [])
+    )
+    coordinator.async_schedule_refresh = MagicMock()
+
+
+@pytest.mark.parametrize(
+    ("state", "record", "relay_id"),
+    [
+        ({"relay": "g1"}, {}, "g1"),
+        ({}, {"relay": {"id": "g2"}}, "g2"),
+        ({}, {"relay": 42}, None),
+        ({}, {}, None),
+    ],
+)
+async def test_push_sends_reports_and_rereads(coordinator, state, record, relay_id):
+    module = _module(raw={"typeIsWatering": True, **record})
+    coordinator.modules = {"m1": module}
+    coordinator.data = {"m1": state}
+    coordinator.pending_local_push = {"m1"}
+    _arm_push(coordinator)
+
+    await coordinator.async_command_push_programs(module)
+
+    coordinator.client.async_push_configuration_and_programs.assert_awaited_once_with(
+        "m1", relay_id
+    )
+    coordinator.client.async_report_programs_sent.assert_awaited_once()
+    coordinator.client.async_report_module_sent.assert_awaited_once_with("m1")
+    assert "m1" not in coordinator.pending_local_push
+    # The re-read picks up the push's timestamp.
+    assert module.raw["programmingSentAt"] == T1
+    coordinator.async_schedule_refresh.assert_called_once()
+
+
+async def test_push_reports_the_programs_it_sent(coordinator):
+    """What the cloud holds right before the push, not what was cached."""
+    module = _scheduled()
+    coordinator.modules = {"m1": module}
+    _arm_push(coordinator)
+
+    await coordinator.async_command_push_programs(module)
+
+    reported = coordinator.client.async_report_programs_sent.call_args[0][1]
+    assert reported == _write_page()["programs"]
+
+
+async def test_push_falls_back_to_the_cached_programs(coordinator):
+    module = _scheduled()
+    coordinator.modules = {"m1": module}
+    _arm_push(coordinator)
+    coordinator.client.async_get_module_page = AsyncMock(
+        side_effect=[SolemConnectionError("boom"), (_write_page(), [])]
+    )
+
+    await coordinator.async_command_push_programs(module)
+
+    coordinator.client.async_push_configuration_and_programs.assert_awaited_once()
+    reported = coordinator.client.async_report_programs_sent.call_args[0][1]
+    assert reported == [_program_raw()]
+
+
+async def test_a_failed_report_still_counts_the_push(coordinator, caplog):
+    """The controller has the programs; only the cloud's bookkeeping is off."""
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.pending_local_push = {"m1"}
+    _arm_push(coordinator)
+    coordinator.client.async_report_programs_sent = AsyncMock(
+        side_effect=SolemConnectionError("boom")
+    )
+    coordinator.client.async_report_module_sent = AsyncMock(
+        side_effect=SolemConnectionError("bang")
+    )
+
+    await coordinator.async_command_push_programs(module)
+
+    assert "m1" not in coordinator.pending_local_push
+    assert coordinator._push_counts["m1"][1] == 1
+    coordinator.client.async_report_module_sent.assert_awaited_once_with("m1")
+    assert "boom" in caplog.text
+    assert "bang" in caplog.text
+    assert module.raw["programmingSentAt"] == T1
+
+
+async def test_a_failed_push_keeps_the_module_pending(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.pending_local_push = {"m1"}
+    _arm_push(coordinator)
+    coordinator.client.async_push_configuration_and_programs = AsyncMock(
+        side_effect=SolemDeviceUnreachableError("unreachable")
+    )
+
+    with pytest.raises(SolemDeviceUnreachableError):
+        await coordinator.async_command_push_programs(module)
+
+    assert "m1" in coordinator.pending_local_push
+    coordinator.client.async_report_programs_sent.assert_not_awaited()
+    assert coordinator.schedule_overview("m1")["pending_push"] is True
+
+
+def _loaded(hass, coordinator) -> None:
+    coordinator.config_entry.mock_state(hass, ConfigEntryState.LOADED)
+
+
+async def test_a_burst_of_edits_costs_one_push(hass, coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _loaded(hass, coordinator)
+    _arm_writes(coordinator, _write_page())
+    coordinator.async_command_push_programs = AsyncMock()
+
+    for budget in (80, 90, 110):
+        await coordinator.async_command_update_program(
+            module, "Matin", {"water_budget": budget}
+        )
+
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=PUSH_DEBOUNCE_SECONDS - 10)
+    )
+    await hass.async_block_till_done()
+    coordinator.async_command_push_programs.assert_not_awaited()
+
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=PUSH_DEBOUNCE_SECONDS + 30)
+    )
+    await hass.async_block_till_done()
+    coordinator.async_command_push_programs.assert_awaited_once_with(module)
+    assert coordinator._push_unsubs == {}
+
+
+async def test_a_failed_deferred_push_is_logged(hass, coordinator, caplog):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    coordinator.pending_local_push = {"m1"}
+    _loaded(hass, coordinator)
+    coordinator.async_command_push_programs = AsyncMock(
+        side_effect=SolemDeviceUnreachableError("unreachable")
+    )
+
+    coordinator._schedule_push("m1")
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=PUSH_DEBOUNCE_SECONDS + 1)
+    )
+    await hass.async_block_till_done()
+
+    assert "Could not push the programs" in caplog.text
+
+
+async def test_a_deferred_push_for_a_vanished_module_does_nothing(hass, coordinator):
+    coordinator.modules = {}
+    coordinator.async_command_push_programs = AsyncMock()
+
+    coordinator._schedule_push("m1")
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=PUSH_DEBOUNCE_SECONDS + 1)
+    )
+    await hass.async_block_till_done()
+
+    coordinator.async_command_push_programs.assert_not_awaited()
+
+
+async def test_a_deferred_push_for_a_module_no_longer_pending_does_nothing(
+    hass, coordinator
+):
+    """E.g. a push now that ran while the edit was waiting for the lock."""
+    coordinator.modules = {"m1": _module()}
+    _loaded(hass, coordinator)
+    coordinator.async_command_push_programs = AsyncMock()
+
+    coordinator._schedule_push("m1")
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=PUSH_DEBOUNCE_SECONDS + 1)
+    )
+    await hass.async_block_till_done()
+
+    coordinator.async_command_push_programs.assert_not_awaited()
+
+
+async def test_no_deferred_push_runs_once_the_entry_is_unloaded(hass, coordinator):
+    coordinator.modules = {"m1": _module()}
+    coordinator.pending_local_push = {"m1"}
+    coordinator.async_command_push_programs = AsyncMock()
+    _loaded(hass, coordinator)
+    coordinator._schedule_push("m1")
+
+    coordinator._cancel_pending_pushes()
+    assert coordinator._push_unsubs == {}
+    coordinator.config_entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
+    # A write still in flight at unload arms one more.
+    coordinator._schedule_push("m1")
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=PUSH_DEBOUNCE_SECONDS + 1)
+    )
+    await hass.async_block_till_done()
+
+    coordinator.async_command_push_programs.assert_not_awaited()
+
+
+async def test_a_push_now_cancels_the_deferred_one(hass, coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_push(coordinator)
+    coordinator._schedule_push("m1")
+
+    await coordinator.async_command_push_programs(module)
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=PUSH_DEBOUNCE_SECONDS + 1)
+    )
+    await hass.async_block_till_done()
+
+    coordinator.client.async_push_configuration_and_programs.assert_awaited_once()
+
+
+async def test_unload_cancels_a_deferred_push(coordinator):
+    unsub = MagicMock()
+    coordinator._push_unsubs["m1"] = unsub
+
+    coordinator._cancel_pending_pushes()
+
+    unsub.assert_called_once()
+    assert coordinator._push_unsubs == {}
+
+
+async def test_pushing_too_often_warns(coordinator, caplog):
+    for _ in range(11):
+        coordinator._count_push("m1")
+    assert "11 times today" in caplog.text
+
+    yesterday = dt_util.now().date() - timedelta(days=1)
+    coordinator._push_counts["m1"] = (yesterday, 50)
+    coordinator._count_push("m1")
+    assert coordinator._push_counts["m1"] == (dt_util.now().date(), 1)
+
+
+async def test_create_backup_names_it(coordinator):
+    module = _module()
+    coordinator.client.async_create_backup = AsyncMock(return_value={})
+
+    await coordinator.async_command_create_backup(module, "Before winter")
+    await coordinator.async_command_create_backup(module)
+
+    names = [c.args[1] for c in coordinator.client.async_create_backup.await_args_list]
+    assert names[0] == "Before winter"
+    # Not the pre-change prefix, so pruning never touches it.
+    assert names[1].startswith("HA backup ")
+
+
+async def test_pruning_keeps_the_newest_ten_pre_change_backups(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    coordinator._schedule_push = MagicMock()
+    coordinator.client.async_list_backups = AsyncMock(
+        return_value=[
+            {"id": f"b{i}", "name": f"HA pre-change 2026-07-{i:02d}", "createdAt": i}
+            for i in range(1, 13)
+        ]
+        + [
+            {"id": "user", "name": "Backup automatico", "createdAt": 0},
+            {"name": "HA pre-change no id"},
+        ]
+    )
+    coordinator.client.async_delete_backup = AsyncMock(
+        side_effect=[None, SolemConnectionError("boom")]
+    )
+
+    await coordinator.async_command_update_program(
+        module, "Matin", {"water_budget": 80}
+    )
+
+    deleted = {
+        c.args[1] for c in coordinator.client.async_delete_backup.await_args_list
+    }
+    assert deleted == {"b1", "b2"}
+
+
+async def test_pruning_orders_iso_timestamps_too(coordinator):
+    coordinator.client.async_list_backups = AsyncMock(
+        return_value=[
+            {
+                "id": f"b{i}",
+                "name": "HA pre-change",
+                "createdAt": f"2026-07-{i:02d}T08:00:00.000Z",
+            }
+            for i in (3, 11, 1, 7, 2, 9, 4, 12, 5, 10, 8, 6)
+        ]
+    )
+    coordinator.client.async_delete_backup = AsyncMock()
+
+    await coordinator._prune_ha_backups("m1")
+
+    deleted = {
+        c.args[1] for c in coordinator.client.async_delete_backup.await_args_list
+    }
+    assert deleted == {"b1", "b2"}
+
+
+async def test_pruning_survives_a_failed_listing(coordinator):
+    coordinator.client.async_list_backups = AsyncMock(side_effect=SolemError("boom"))
+    coordinator.client.async_delete_backup = AsyncMock()
+
+    await coordinator._prune_ha_backups("m1")
+
+    coordinator.client.async_delete_backup.assert_not_awaited()
+
+
+async def test_schedule_overview_is_pending_right_after_an_edit(coordinator):
+    coordinator.modules = {"m1": _scheduled()}
+    assert coordinator.schedule_overview("m1")["pending_push"] is False
+    coordinator.pending_local_push.add("m1")
+    assert coordinator.schedule_overview("m1")["pending_push"] is True
+
+
+async def test_poll_waits_for_a_write_in_flight(coordinator):
+    """The projection and its re-read must not land in the middle of a write."""
+    m1 = _module(id="m1", raw={"typeIsWatering": True, "programmingUpdatedAt": T0})
+    page = _page()
+    _reread_setup(
+        coordinator, {"m1": m1}, {"m1": {"id": "m1", "programmingUpdatedAt": T1}}, page
+    )
+
+    await coordinator._write_lock.acquire()
+    task = asyncio.get_running_loop().create_task(
+        coordinator._async_refresh_module_fields()
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+    coordinator.client.async_get_module_fields.assert_not_awaited()
+    page.assert_not_awaited()
+
+    coordinator._write_lock.release()
+    await task
+    page.assert_awaited_once_with("m1")
+
+
+async def test_a_write_waits_for_a_poll_in_flight(coordinator):
+    module = _module()
+    coordinator.modules = {"m1": module}
+    _arm_writes(coordinator, _write_page())
+    coordinator._schedule_push = MagicMock()
+
+    await coordinator._write_lock.acquire()
+    task = asyncio.get_running_loop().create_task(
+        coordinator.async_command_update_program(module, "Matin", {"water_budget": 80})
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+    coordinator.client.async_get_module_page.assert_not_awaited()
+
+    coordinator._write_lock.release()
+    await task
+    coordinator.client.async_update_programs.assert_awaited_once()
+
+
+def _synced(updated: str, sent: str) -> dict:
+    return {
+        "m1": {
+            "id": "m1",
+            "programmingUpdatedAt": updated,
+            "programmingSentAt": sent,
+        }
+    }
+
+
+async def test_a_pending_edit_clears_once_the_cloud_reports_it_sent(coordinator):
+    """E.g. pushed from the MySOLEM app after Home Assistant's push failed."""
+    m1 = _module(id="m1", raw={"typeIsWatering": True, "programmingUpdatedAt": T1})
+    _reread_setup(coordinator, {"m1": m1}, _synced(T1, T1), _page())
+    coordinator.pending_local_push = {"m1"}
+
+    await coordinator._async_refresh_module_fields()
+
+    assert "m1" not in coordinator.pending_local_push
+
+
+async def test_a_pending_edit_stays_while_the_cloud_is_out_of_sync(coordinator):
+    m1 = _module(id="m1", raw={"typeIsWatering": True, "programmingUpdatedAt": T1})
+    _reread_setup(coordinator, {"m1": m1}, _synced(T1, T0), _page())
+    coordinator.pending_local_push = {"m1"}
+
+    await coordinator._async_refresh_module_fields()
+
+    assert "m1" in coordinator.pending_local_push
+
+
+async def test_a_pending_edit_stays_while_its_push_is_waiting(coordinator):
+    m1 = _module(id="m1", raw={"typeIsWatering": True, "programmingUpdatedAt": T1})
+    _reread_setup(coordinator, {"m1": m1}, _synced(T1, T1), _page())
+    coordinator.pending_local_push = {"m1"}
+    coordinator._push_unsubs["m1"] = MagicMock()
+
+    await coordinator._async_refresh_module_fields()
+
+    assert "m1" in coordinator.pending_local_push
+
+
+async def test_a_pending_edit_stays_when_the_reread_fails(coordinator):
+    """The pair is then not adopted, so it cannot say the cloud is in sync."""
+    m1 = _module(id="m1", raw={"typeIsWatering": True, "programmingUpdatedAt": T0})
+    _reread_setup(
+        coordinator,
+        {"m1": m1},
+        _synced(T1, T1),
+        AsyncMock(side_effect=SolemConnectionError("boom")),
+    )
+    coordinator.pending_local_push = {"m1"}
+
+    await coordinator._async_refresh_module_fields()
+
+    assert "m1" in coordinator.pending_local_push

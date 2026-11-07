@@ -46,6 +46,7 @@ your account:
 | **Select** *Run program* | Pick a stored program to start it now. |
 | **Button** *Stop watering* | Stop anything running — a manual station run or a program. |
 | **Switch** *Irrigation enabled* | Turn the controller on, or off permanently. Also shows an OFF set from MySOLEM or by a rain gauge. |
+| **Switch** *&lt;program&gt; schedule* per program | Turn a stored program on or off. Off "parks" it the way MySOLEM does (it stays stored but never runs); on brings back the schedule it had. Off too for a program with nothing to run (no start time or duration). Shown under *Configuration*. Bluetooth-only controllers get it too. |
 | **Number** *Rain delay* | Disable for N days (0 = enabled) — SOLEM's "Report de pluie". Shows the days left, whoever set the delay. |
 | **Sensor** *Watering station* | Name of the station currently watering (idle = none). |
 | **Sensor** *Schedule* | When the controller next waters, from the programs stored in MySOLEM. Attributes: each program (days or cycle, start times or LR-AG windows, per-station durations, enabled) and every run from today until tomorrow night. *Unknown* while the controller is off. Bluetooth-only controllers get it too. |
@@ -72,12 +73,94 @@ own device with:
 
 | Action | What it does |
 | --- | --- |
-| `solem_irrigation.run` | Stop, run a **program**, or run a station for a **specific** duration: `mode` (`stop` / `program` / `station`) plus `program`, `station`, and `duration` (minutes). An explicit `duration` is remembered for the next run. Programs are run through this action (no per-program entity). |
+| `solem_irrigation.run` | Stop, run a **program**, or run a station for a **specific** duration: `mode` (`stop` / `program` / `station`) plus `program`, `station`, and `duration` (minutes). An explicit `duration` is remembered for the next run. Programs are started through this action. |
 | `solem_irrigation.set_enabled` | The on/off command: `enabled` (true/false) plus an optional `days` to disable for a period (rain delay; `0`/omitted = permanent). |
+| `solem_irrigation.set_program_schedule` | Edit a stored **program**: its days, start times, station durations or LR-AG windows, water budget, and whether it is on. See [Editing programs](#editing-programs). |
+| `solem_irrigation.push_programs` | Push the programs stored in MySOLEM to the controller now. |
+| `solem_irrigation.create_backup` | Save a named backup of the controller's programs in MySOLEM (`name` optional), restorable from the MySOLEM app. |
+
+All of them target a controller's *Irrigation enabled* switch (or its device).
 
 Opening a station valve runs it for the remembered duration (default 5 min until
 you set one); use `solem_irrigation.run` to run for a specific duration, which
 then becomes the new remembered default.
+
+### Editing programs
+
+`solem_irrigation.set_program_schedule` changes one stored program, named by
+`program` (its name, index or id). Only the fields you give change; everything
+else in the program is sent back exactly as MySOLEM holds it.
+
+```yaml
+# A classic controller (LR-IP, LR-IS…): Monday, Wednesday and Friday at 06:00
+# and 20:30, 10 minutes on station 1 and 15 on station 2.
+action: solem_irrigation.set_program_schedule
+target:
+  entity_id: switch.garden_irrigation_enabled
+data:
+  program: Matin
+  schedule_type: weekly
+  weekdays: [mon, wed, fri]
+  start_times: ["06:00", "20:30"]
+  durations: {"1": 10, "2": 15}
+```
+
+```yaml
+# Every 3 days, the first run tomorrow, at 80 % of the programmed durations.
+action: solem_irrigation.set_program_schedule
+target:
+  entity_id: switch.garden_irrigation_enabled
+data:
+  program: Matin
+  schedule_type: interval
+  every_days: 3
+  offset_days: 1
+  water_budget: 80
+```
+
+```yaml
+# An LR-AG: water 06:00-08:00 throughout, and 22:00-01:00 in cycles of
+# 10 minutes on, 20 minutes off.
+action: solem_irrigation.set_program_schedule
+target:
+  entity_id: switch.vineyard_irrigation_enabled
+data:
+  program: Rang 1
+  windows:
+    - {start: "06:00", end: "08:00"}
+    - {start: "22:00", end: "01:00", soak_on_minutes: 10, soak_off_minutes: 20}
+```
+
+```yaml
+action: solem_irrigation.push_programs
+target:
+  entity_id: switch.garden_irrigation_enabled
+```
+
+```yaml
+action: solem_irrigation.create_backup
+target:
+  entity_id: switch.garden_irrigation_enabled
+data:
+  name: Before winter
+```
+
+How an edit travels:
+
+- It is saved in **MySOLEM first**, right after an automatic backup of the
+  programs (the newest 10 of those, named *HA pre-change …*, are kept; your
+  own backups are never touched). The *Schedule* sensor shows it at once.
+- It reaches the **controller** with a push, **90 seconds** after the last
+  edit, so a burst of edits costs one push. SOLEM rate-limits pushes to a
+  controller (an LR-AG allows 30 a day), and a warning is logged past 10 a day.
+  Until the push lands, the *Schedule* sensor's `pending_push` is true. Give
+  `push: false` to save in MySOLEM only, and push later with
+  `solem_irrigation.push_programs` (or from the MySOLEM app). A push that fails
+  (controller unreachable) leaves the edit pending, and is logged.
+- A **Bluetooth-only** controller gets the edit in MySOLEM only: the cloud
+  cannot reach it, so nothing is pushed, and the MySOLEM app hands it over the
+  next time the phone connects. Its program switches work the same way; the
+  three actions need an *Irrigation enabled* switch, which it has not.
 
 Every module (including the gateway) appears as a Home Assistant **device**;
 controllers are linked to the gateway they communicate through. A module you
@@ -131,13 +214,14 @@ pool integration, not this one.)
   reached by a phone standing next to them; MySOLEM has no gateway or WiFi link
   to them, and its own web app does not even try to read their state. The
   integration can neither read nor command them, so it gives them only their
-  *Schedule* sensor (removing the other entities versions up to 0.9.0b1
-  created) and logs a warning naming them. For these, a Bluetooth integration such as
+  *Schedule* sensor and program switches (removing the other entities versions
+  up to 0.9.0b1 created) and logs a warning naming them. Turning a program on
+  or off changes MySOLEM's copy only. For these, a Bluetooth integration such as
   [Solem Toolkit](https://github.com/hcraveiro/Home-Assistant-Solem-Toolkit) is
   the realistic route.
-- The *Schedule* sensor is read-only. The programs are read at setup and read
-  again when MySOLEM reports a programming change, which is checked on every
-  poll. Times use Home Assistant's time zone, as the module record carries none.
+- The programs are read at setup and read again when MySOLEM reports a
+  programming change, which is checked on every poll, and before every edit
+  from Home Assistant, so an edit never overwrites one made in MySOLEM since. Times use Home Assistant's time zone, as the module record carries none.
   `pending_push` is true while MySOLEM holds edits the controller has not
   received yet.
 - An agricultural **LR-AG** works like any controller, with these differences:
