@@ -639,7 +639,10 @@ async def test_a_powered_down_fleet_loads_with_its_stored_status(
 
     assert entity_state("switch", "m1_enabled") == "off"
     assert entity_state("number", "m1_rain_delay") == "2.0"
-    assert entity_state("sensor", "m1_running_station") == "Z1"
+    # Even if ``runningStation`` is non-zero in the payload, an OFF controller
+    # is not watering (#24).
+    assert entity_state("sensor", "m1_running_station") == "unknown"
+    assert entity_state("valve", "m1_valve_o1") == "closed"
     devices = dr.async_get(hass)
     controller_device = devices.async_get_device_by_identifier(
         (DOMAIN, "m1"), entry.entry_id

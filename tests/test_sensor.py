@@ -134,7 +134,16 @@ def test_running_station_time_remaining(coordinator, module):
 
 
 def test_running_station_no_time_remaining_when_zero(coordinator, module):
+    coordinator.running_station_index.return_value = 1
     coordinator.module_state.return_value = {"status": {"watering": {"time": "00:00"}}}
+    sensor = SolemRunningStationSensor(coordinator, module)
+    assert sensor.extra_state_attributes is None
+
+
+def test_running_station_no_time_remaining_when_idle(coordinator, module):
+    """When the controller is OFF, the cloud still populates ``time`` (#24)."""
+    coordinator.running_station_index.return_value = 0
+    coordinator.module_state.return_value = {"status": {"watering": {"time": "00:12"}}}
     sensor = SolemRunningStationSensor(coordinator, module)
     assert sensor.extra_state_attributes is None
 

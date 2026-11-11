@@ -1345,7 +1345,15 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
         return self.module_state(module_id).get("status", {}).get("watering", {})
 
     def running_station_index(self, module_id: str) -> int:
-        """Return the index of the station currently watering (0 = none)."""
+        """Return the index of the station currently watering (0 = none).
+
+        When a controller is OFF, the cloud still populates ``runningStation``
+        from the stored schedule during each programmed window (#24); MySOLEM's
+        own web app checks ``state`` first and ignores ``runningStation`` while
+        OFF.
+        """
+        if self.watering_enabled(module_id) is False:
+            return 0
         try:
             return int(self._watering(module_id).get("runningStation", 0) or 0)
         except TypeError, ValueError:
@@ -1356,12 +1364,19 @@ class SolemDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
 
         Several can water at once. Measured live on an LR-AG: an output reports
         ``state`` 1 during a manual run but 2 while a program runs it, so any
-        non-zero ``state`` is watering.
+        non-zero ``state`` is watering -- unless ``rainDelay`` is non-zero, in
+        which case MySOLEM shows the output as OFF.
         """
+        pending = self._pending_status(module_id)
+        if pending is not None and not pending[0]:
+            return {}
+        ignore_delay = pending is not None and pending[0]
         running: dict[int, dict[str, Any]] = {}
         for index, output in sorted(_ag_outputs(self.module_state(module_id)).items()):
             try:
-                if int(output.get("state") or 0) != 0:
+                if int(output.get("state") or 0) != 0 and (
+                    ignore_delay or int(output.get("rainDelay") or 0) == 0
+                ):
                     running[index] = output
             except TypeError, ValueError:
                 continue
