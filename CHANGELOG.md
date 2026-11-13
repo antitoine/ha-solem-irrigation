@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-13
+
+### Fixed
+
+- **Station valves and *Watering station* no longer open on schedule while a
+  controller is OFF.** Even when a controller is set to Permanent OFF or under
+  a rain delay (`status.watering.state` `0`), MySOLEM's live state endpoint
+  continues to populate `runningStation`, `runningProgram`, and `time` during
+  each scheduled program window. MySOLEM's own web app checks `state` first and
+  ignores those fields whenever the controller is OFF (and checks
+  `rainDelay == 0` on LR-AG outputs before treating `output.state` as
+  watering); the coordinator and *Watering station*'s `time_remaining`
+  attribute now do the same.
+  ([#24](https://github.com/antitoine/ha-solem-irrigation/issues/24),
+  [#25](https://github.com/antitoine/ha-solem-irrigation/pull/25))
+
 ## [0.12.0] - 2026-11-07
 
 Adds a *Schedule* sensor for stored programs, per-program *&lt;program&gt;
@@ -473,7 +489,8 @@ instead of ~11 per-station/per-program controls.
 - Optimistic state updates with a delayed reconcile to cope with LoRa latency.
 - English and French translations.
 
-[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/antitoine/ha-solem-irrigation/compare/v0.9.0...v0.10.0

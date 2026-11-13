@@ -162,6 +162,8 @@ class SolemRunningStationSensor(SolemModuleEntity, SensorEntity):
             if all(time == "--:--" for time in times):
                 return None
             return {"time_remaining": ", ".join(times)}
+        if self.coordinator.running_station_index(self._module_id) <= 0:
+            return None
         watering = (
             self.coordinator.module_state(self._module_id)
             .get("status", {})

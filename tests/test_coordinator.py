@@ -208,6 +208,19 @@ def test_find_station_and_program():
 async def test_running_station_index(coordinator):
     coordinator.data = {"m1": {"status": {"watering": {"runningStation": 3}}}}
     assert coordinator.running_station_index("m1") == 3
+    coordinator.data = {
+        "m1": {"status": {"watering": {"state": 1, "runningStation": 2}}}
+    }
+    assert coordinator.running_station_index("m1") == 2
+    # When a controller is OFF, the cloud still populates ``runningStation``
+    # during each programmed window (#24): MySOLEM ignores it, and so must we.
+    for watering in (
+        {"state": 0, "rainDelay": 0, "runningStation": 1, "runningProgram": 1},
+        {"state": 0, "rainDelay": 3, "runningStation": 2},
+        {"state": "OFF", "rainDelay": 0, "runningStation": 1},
+    ):
+        coordinator.data = {"m1": {"status": {"watering": watering}}}
+        assert coordinator.running_station_index("m1") == 0
     # Garbage / missing both read as idle.
     coordinator.data = {"m1": {"status": {"watering": {"runningStation": "x"}}}}
     assert coordinator.running_station_index("m1") == 0
@@ -571,7 +584,7 @@ async def test_update_data_falls_back_to_the_status_stored_on_the_record(
 
     assert coordinator.watering_enabled("m1") is False
     assert coordinator.rain_delay_days("m1") == 3
-    assert coordinator.running_station_index("m1") == 1
+    assert coordinator.running_station_index("m1") == 0
     assert coordinator.module_state("m1")["relay"] == "g1"
     assert coordinator.module_state("g1") == {}
     assert coordinator.relevant_module_ids() == {"m1", "g1"}
@@ -1778,6 +1791,9 @@ async def test_ag_running_outputs_reads_every_output(coordinator):
             _ag_output(2, state=2, time="00:40"),  # a program run
             _ag_output(0, state=1, time="00:05"),  # a manual run
             _ag_output(1, state=0),
+            # An output under a rain delay or permanent OFF is not watering.
+            _ag_output(3, state=2, rain_delay=255),
+            _ag_output(4, state=2, rain_delay=3),
             {"index": "x", "state": 1},
             {"state": 1},
             "garbage",
@@ -1787,6 +1803,29 @@ async def test_ag_running_outputs_reads_every_output(coordinator):
     assert list(coordinator.ag_running_outputs("ag1")) == [1, 3]
     assert coordinator.ag_running_outputs("ag1")[3]["time"] == "00:40"
     assert coordinator.ag_running_outputs("unknown") == {}
+
+
+async def test_ag_running_outputs_respects_pending_on_off_command(coordinator):
+    """A just-issued OFF closes running outputs before the LoRa ack lands."""
+    module = _ag_module()
+    coordinator.modules = {"ag1": module}
+    running = _ag_state(_ag_output(0, state=2, rain_delay=0))
+    coordinator.data = {"ag1": running}
+    coordinator.client.async_set_ag_status = AsyncMock()
+    coordinator.async_schedule_refresh = MagicMock()
+
+    await coordinator.async_command_set_status(module, enabled=False, days=2)
+    # Reconcile poll still reports the pre-ack state (rainDelay 0, state 2).
+    coordinator.client.async_get_module_state = AsyncMock(return_value=running)
+    coordinator.data = await coordinator._async_update_data()
+    assert coordinator.ag_running_outputs("ag1") == {}
+
+    # Conversely, a pending ON admits a running output before rainDelay clears.
+    off_but_running = _ag_state(_ag_output(0, state=2, rain_delay=255))
+    await coordinator.async_command_set_status(module, enabled=True)
+    coordinator.client.async_get_module_state = AsyncMock(return_value=off_but_running)
+    coordinator.data = await coordinator._async_update_data()
+    assert list(coordinator.ag_running_outputs("ag1")) == [1]
 
 
 @pytest.mark.parametrize(
